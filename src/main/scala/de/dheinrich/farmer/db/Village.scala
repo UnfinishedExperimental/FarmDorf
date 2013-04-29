@@ -1,19 +1,24 @@
 package de.dheinrich.farmer.db
 
 import scala.slick.driver.HsqldbDriver.simple._
+import java.sql.Date
 
-case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100)
+case class Village(id: Int, ownerID: Option[Int], name: String, lastUpdate: Date, x: Int, y: Int, points: Int = 0, mood: Int = 100)
 //case class PlayerVillage buildings & rohstoffe
 
 object Villages extends Table[Village]("VILLAGES") {
   def id = column[Int]("ID", O.PrimaryKey)
   def ownerID = column[Option[Int]]("OWNER_ID")
   def name = column[String]("NAME")
+
+  def lastUpdate = column[Date]("LAST_UPDATE")
+
   def x = column[Int]("X")
   def y = column[Int]("Y")
+
   def points = column[Int]("POINTS")
   def mood = column[Int]("MOOD", O.Default(100))
-  
+
   def pk = index("IDX_COORD", (x, y), unique = true)
 
   def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood <> (Village, Village.unapply _)

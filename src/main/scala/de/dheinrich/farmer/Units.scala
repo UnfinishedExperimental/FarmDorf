@@ -4,6 +4,7 @@ object  Units extends Enumeration{
   val SPEER = Value("spear")
   val SCHWERT = Value("sword")
   val BOGEN = Value("archer")
+  val AXT = Value("axe")
   val SPAEHER = Value("spy")
   val LREITER = Value("light")
   val BREITER = Value("marcher")
