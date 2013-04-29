@@ -3,8 +3,16 @@ package de.dheinrich.farmer.db
 import scala.slick.driver.HsqldbDriver.simple._
 import java.sql.Date
 
-case class Village(id: Int, ownerID: Option[Int], name: String, lastUpdate: Date, x: Int, y: Int, points: Int = 0, mood: Int = 100)
-//case class PlayerVillage buildings & rohstoffe
+private object Time{
+  val old = new Date(0)
+}
+
+case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
+  lastUpdate: Date = Time.old, lastUnitUp: Date = Time.old, lastBuildingsUp: Date = Time.old) {
+  def buildings(implicit session: Session) = Query(VillageBuildings) filter (_.villID is id) list
+  def units(implicit session: Session) = Query(VillageUnits) filter (_.villID is id) list
+  def resources(implicit session: Session) = Query(VillagesResources) filter (_.villID is id) list
+}
 
 object Villages extends Table[Village]("VILLAGES") {
   def id = column[Int]("ID", O.PrimaryKey)
@@ -12,6 +20,8 @@ object Villages extends Table[Village]("VILLAGES") {
   def name = column[String]("NAME")
 
   def lastUpdate = column[Date]("LAST_UPDATE")
+  def lastUpdateUnits = column[Date]("LAST_UPDATE_UNITS")
+  def lastUpdateBuildings = column[Date]("LAST_UPDATE_BUILDINGS")
 
   def x = column[Int]("X")
   def y = column[Int]("Y")
@@ -21,7 +31,7 @@ object Villages extends Table[Village]("VILLAGES") {
 
   def pk = index("IDX_COORD", (x, y), unique = true)
 
-  def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood <> (Village, Village.unapply _)
+  def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood ~ lastUpdate ~ lastUpdateUnits ~ lastUpdateBuildings <> (Village, Village.unapply _)
 
   //Queries
   def byID(id: Int)(implicit session: Session) = Query(Villages).filter(_.id is id).firstOption
@@ -34,4 +44,7 @@ object Villages extends Table[Village]("VILLAGES") {
     if (a == 0)
       * insert v
   }
+  
+  def unitsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateUnits) update(date)
+  def buildingsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateBuildings) update(date)
 }

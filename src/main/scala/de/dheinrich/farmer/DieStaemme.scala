@@ -24,7 +24,6 @@ import scalaz._
 import Scalaz._
 
 object DieStaemme {
-  val dorfUebersicht = "overview_villages"
 
   private implicit def toSeq(a: (String, String)) = Seq(a)
   private val siteURL = ".die-staemme.de"
@@ -120,17 +119,14 @@ object DieStaemme {
 
     def logout = execute(game <<? action("logout"))
 
-    //screen & village
-    val kartenScreen = "map"
+    private def screenR(screen: Screens.Value) = game <<? ("screen" -> screen.toString)
+    private def vilScreen(screen: Screens.Value, id: Int) = screenR(screen) <<? "village" -> id.toString
 
-    private def screenR(screen: String) = game <<? ("screen" -> screen)
-    private def vilScreen(screen: String, id: Int) = screenR(screen) <<? "village" -> id.toString
+    def screenRequest(screen: Screens.Value) = execute(screenR(screen))
 
-    def screenRequest(screen: String) = execute(screenR(screen))
-
-    def villagePage(v: Village, screen: String) = execute(vilScreen(screen, v.id))
-    def villageOverview(v: Village) = execute(vilScreen("overview", v.id))
-
+    def villagePage(v: Village, screen: Screens.Value) = execute(vilScreen(screen, v.id))
+    def villageOverview(v: Village) = villagePage(v, Screens.Overview)
+    
     //map stuff
     def querryMap(range: (Range, Range)) = execute {
       def mod(ra: Range) = {
@@ -153,3 +149,5 @@ object DieStaemme {
   }
 
 }
+
+

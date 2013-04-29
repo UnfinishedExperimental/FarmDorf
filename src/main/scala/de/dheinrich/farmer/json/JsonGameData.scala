@@ -2,16 +2,13 @@ package de.dheinrich.farmer.json
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import de.dheinrich.farmer.db.Village
+import java.sql.Date
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 case class JsonGameData(player: JsonPlayer, village: JsonVillage) {
   import village._
   def getVillage = Village(id, Some(player.id), name, coordinate._1, coordinate._2)
 }
-
-//example json
-//{
-//  "player": {...},
 //  "nav": {
 //    "parent": 2
 //  },

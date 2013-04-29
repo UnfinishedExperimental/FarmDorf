@@ -35,6 +35,17 @@ import scala.concurrent.Future
 import scalaz._
 import Scalaz._
 import de.dheinrich.farmer.json.JsonMapVillage
+import java.text.SimpleDateFormat
+import java.sql.Date
+import de.dheinrich.farmer.db.Village
+import de.dheinrich.farmer.db.Player
+import de.dheinrich.farmer.json.JsonPlayer
+import de.dheinrich.farmer.db.VillageBuildings
+import de.dheinrich.farmer.db.VillageBuilding
+import de.dheinrich.farmer.db.VillageResources
+import de.dheinrich.farmer.db.VillagesResources
+import de.dheinrich.farmer.db.VillageUnits
+import de.dheinrich.farmer.db.VillageUnit
 
 object Test {
   val name = "King Henry 8th"
@@ -50,61 +61,72 @@ object Main extends AppDatabase {
   val user = JsonMapper.mapper.readValue(new File("login.json"), classOf[UserLogin])
   val sessFuture = DieStaemme.login(user)
 
-  //      val gamePattern = """game_data = (\{.+\})""".r
-  //      val gamedata = (xml \\ "script").view flatMap { n: Node =>
-  //        gamePattern.findFirstIn(n.text) map { a =>
-  //          val gamePattern(data) = a
-  //          JsonMapper.deserialize[JsonGameData](data)
-  //        }
-  //      } head
+  def parseGameData(xml: Node) = {
+    val gamePattern = """game_data = (\{.+\})""".r
+    (xml \\ "script").view flatMap { n: Node =>
+      gamePattern.findFirstIn(n.text) map { a =>
+        val gamePattern(data) = a
+        JsonMapper.deserialize[JsonGameData](data)
+      }
+    } head
+  }
 
-  def ownVillages = for (xml <- screenXML(DieStaemme.dorfUebersicht)) yield {
+  type PlayerType = { val id: Int; val name: String }
+
+  def ownVillages(p: PlayerType) = for (xml <- screenXML(Screens.VillageOverview)) yield parseVillages(p, xml)
+
+  def parseVillages(p: PlayerType, xml: Node) = {
+    val now = parseServerTime(xml)
 
     val idPattern = """label_text_(\d+)""".r
-    def parseVillageRow(n: Node) =
-      {
-        val idPattern(id) = (n \ "@id").text
-        id.toInt
-      }
+    val otherPattern = """(.+) \((\d+)|(\d+)\)""".r
+    def parseVillageRow(n: Node) = {
+      val idPattern(id) = (n \ "@id").text
+      val otherPattern(name, x, y) = n.text
+      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = now)
+    }
 
     //find all tags of the following form: <span id="label_text_45048">London (409|693) K64</span>
     val villageNodes = xml \\ "span" filter (n => (n \ "@id").text startsWith "label_text")
 
-    val villageIDs = villageNodes map parseVillageRow
+    val villages = villageNodes map parseVillageRow
 
-    villageIDs map { v =>
+    villages map { v =>
       DB withSession {
-        Query(Villages).filter(_.id is v) first;
+        Query(Villages).filter(_.id is v.id) firstOption match {
+          case Some(c) => c
+          case _ => Villages.*.insert(v); v
+        }
       }
     }
   }
 
-  def getUnitCountFromVillage(v: Village): Future[Seq[(String, (Int, Int))]] = {
+  def getUnitCountFromVillage(v: Village) = for (xml <- screenVilXML(v, Screens.Train)) yield parseUnitCounts(v, xml)
+
+  def parseUnitCounts(v: Village, xml: Node) = {
     val typePatter = """return UnitPopup\.open\(event, '(\w+)'\)""".r
     val unitPatter = """(\d+)/(\d+)""".r
 
-    for (xml <- screenVilXML(v, "train")) yield {
-      val unitRows = xml \\ "tr" filter (n => (n \ "@class").toString startsWith "row")
-      for (row <- unitRows) yield {
-        val columns = row \\ "td"
-        val typePatter(unitType) = (columns(0) \ "a" \ "@onclick").toString
-        val unitPatter(there, total) = columns(columns.size - 2).text
-        unitType -> (there.toInt, total.toInt)
-      }
+    val unitRows = xml \\ "tr" filter (n => (n \ "@class").toString startsWith "row")
+    for (row <- unitRows) yield {
+      val columns = row \\ "td"
+      val typePatter(unitType) = (columns(0) \ "a" \ "@onclick").toString
+      val unitPatter(there, total) = columns(columns.size - 2).text
+      Units.withName(unitType) -> (there.toInt, total.toInt)
     }
   }
 
-  def screenXML(descr: Any) = {
+  def screenXML(descr: Screens.Value) = {
     for (
       s <- sessFuture;
-      r <- s.screenRequest(descr.toString())
+      r <- s.screenRequest(descr)
     ) yield HTML5Parser.loadXML(r.getResponseBody())
   }
 
-  def screenVilXML(v: Village, descr: Any) = {
+  def screenVilXML(v: Village, descr: Screens.Value) = {
     for (
       s <- sessFuture;
-      r <- s.villagePage(v, descr.toString())
+      r <- s.villagePage(v, descr)
     ) yield HTML5Parser.loadXML(r.getResponseBody())
   }
 
@@ -115,24 +137,13 @@ object Main extends AppDatabase {
     images foreach println
   }
 
-  //  def getKBestFarms(v: Village, k: Int, filter: Iterable[JsonMapVillage] => Iterable[JsonMapVillage]) = {
-  //    val sekx = v.x / 20
-  //    val seky = v.y / 20
-  //
-  //    for (
-  //      s <- sessFuture;
-  //      sektors <- s.querryMap((sekx, seky))
-  //    ) yield {
-  //      val barbars = sektors flatMap (_.data.villages) filter (_.owner == None) groupBy (_.id) map (_._2.head)
-  //
-  //      val best = filter(barbars)
-  //      if (best.size < k)
-  //        null
-  //      else
-  //        best.take(k)
-  //    }
-  //
-  //  }
+  def parseServerTime(xml: Node) = {
+    val time = xml \\ "span" filter (n => n \ "@id" equals "serverTime") toString
+    val date = xml \\ "span" filter (n => n \ "@id" equals "serverDate") toString
+
+    val format = new SimpleDateFormat("HH:mm:ssdd/MM/yyyy")
+    new Date(format.parse(time + date).getTime())
+  }
 
   def populateDB = {
     val time = System.currentTimeMillis()
@@ -141,6 +152,8 @@ object Main extends AppDatabase {
       sektors <- s.querryMap((0 until 900, 0 until 900))
     ) yield {
       println("time to load " + (System.currentTimeMillis() - time))
+
+      val now = new Date(new java.util.Date().getTime())
 
       DB withSession {
         Query(Villages).mutate(_.delete)
@@ -154,7 +167,7 @@ object Main extends AppDatabase {
         Players.*.insertAll(p.map(_.toPlayer).toSeq: _*)
         println("füge Dörfer hinzu")
         val v = sektors flatMap (_.data.villages) groupBy (_.id) map (_._2.head)
-        Villages.*.insertAll(v.map(_.toVillage).toSeq: _*)
+        Villages.*.insertAll(v.map(_.toVillage.copy(lastUpdate = now)).toSeq: _*)
       }
     }
 
@@ -176,33 +189,48 @@ object Main extends AppDatabase {
 
   def main(args: Array[String]): Unit = {
 
+//    populateDB
     val f = for (s <- sessFuture) yield {
 
       DB withSession {
         val player = Players.byName(s.user.userName).get
-        val villages = Villages.ofPlayer(player)
-        
-        for (v <- villages) {
-          println(v)
-          
-          val q = Query(Villages) filter (_.ownerID isNull) sortBy (x => {
-            val dx = x.x - v.x
-            val dy = x.y - v.y
-            (dx * dx + dy * dy)
-          })
 
-          val b = q.take(50).list
-          b foreach { c =>
-            val dx = c.x - v.x
-            val dy = c.y - v.y
-            println(Math.sqrt(dx * dx + dy * dy))
-          }
+        for (
+          xml <- screenXML(Screens.VillageOverview);
+          nowO <- parseServerTime(xml).success;
+          gdata <- parseGameData(xml).success
+        ) {
+          println(gdata.village)
+          val un:List[VillageUnit] = Query(VillageUnits) filter(_.villID is gdata.village.id) list;
+          un foreach println
+//          for (b <- gdata.village.gebaeude) {
+//            val building = VillageBuilding(gdata.village.id, b.typ, b.stufe)
+//            VillageBuildings.save(building, nowO)
+//          }
+//          
+//          val spei = gdata.village.speicher          
+//          VillagesResources.save(VillageResources(gdata.village.id, nowO, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
+//
+//          for (
+//            vill <- parseVillages(gdata.player, xml);
+//            xml2 <- screenVilXML(vill, Screens.Train);
+//            now <- parseServerTime(xml2).success;
+//            units <- parseUnitCounts(vill, xml2)
+//          ) {
+//            val unit = VillageUnit(gdata.village.id, units._1, units._2._2)
+//            VillageUnits.save(unit, now)
+//          }
         }
       }
     }
 
     Await.ready(f, 1 day)
-    //    populateDB   
+
+    //     val q = Query(Villages) filter (_.ownerID isNull) sortBy (x => {
+    //                val dx = x.x - v.x
+    //                val dy = x.y - v.y
+    //                (dx * dx + dy * dy)
+    //              })
     //    Await.ready(f, 1 day)
   }
 

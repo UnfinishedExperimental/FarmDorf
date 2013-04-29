@@ -24,4 +24,6 @@ object Buildings extends Enumeration {
   
   val Versteck = Value("hide")
   val Wall = Value("wall")
+    
+  implicit def toScreen(b:Buildings.Value) = Screens.withName(b.toString)
 }
