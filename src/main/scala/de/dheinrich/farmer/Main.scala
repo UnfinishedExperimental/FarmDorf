@@ -34,6 +34,7 @@ import scala.concurrent.Promise
 import scala.concurrent.Future
 import scalaz._
 import Scalaz._
+import Tag._
 import de.dheinrich.farmer.json.JsonMapVillage
 import java.text.SimpleDateFormat
 import java.sql.Date
@@ -66,13 +67,11 @@ object Main extends AppDatabase {
 
   type PlayerType = { val id: Int; val name: String }
 
-  def ownVillages(p: PlayerType) = for (xml <- screenXML(Screens.VillageOverview)) yield parseVillages(p, xml)
-
-  def parseVillages(p: PlayerType, xml: Node) = {
+  def parseVillages(p: PlayerType, xml: Node @@ VillageOverview) = {
     val now = parseServerTime(xml)
 
     val idPattern = """label_text_(\d+)""".r
-    val otherPattern = """(.+) \((\d+)|(\d+)\)""".r
+    val otherPattern = """(.+) \((\d+)\|(\d+)\).*""".r
     def parseVillageRow(n: Node) = {
       val idPattern(id) = (n \ "@id").text
       val otherPattern(name, x, y) = n.text
@@ -94,9 +93,7 @@ object Main extends AppDatabase {
     }
   }
 
-  def getUnitCountFromVillage(v: Village) = for (xml <- screenVilXML(v, Screens.Train)) yield parseUnitCounts(v, xml)
-
-  def parseUnitCounts(v: Village, xml: Node) = {
+  def parseUnitCounts(v: Village, xml: Node @@ Train) = {
     val typePatter = """return UnitPopup\.open\(event, '(\w+)'\)""".r
     val unitPatter = """(\d+)/(\d+)""".r
 
@@ -109,18 +106,18 @@ object Main extends AppDatabase {
     }
   }
 
-  def screenXML(descr: Screens.Value) = {
+  def screenXML[A](descr: Screens.Value @@ A) : Future[Node @@ A] = {
     for (
       s <- sessFuture;
       r <- s.screenRequest(descr)
-    ) yield HTML5Parser.loadXML(r.getResponseBody())
+    ) yield Tag(HTML5Parser.loadXML(r.getResponseBody()))
   }
 
-  def screenVilXML(v: Village, descr: Screens.Value) = {
+  def screenVilXML[A](v: Village, descr:Screens.Value @@ A) : Future[Node @@ A] = {
     for (
       s <- sessFuture;
       r <- s.villagePage(v, descr)
-    ) yield HTML5Parser.loadXML(r.getResponseBody())
+    ) yield Tag(HTML5Parser.loadXML(r.getResponseBody()))
   }
 
   def listImages = {
@@ -131,8 +128,8 @@ object Main extends AppDatabase {
   }
 
   def parseServerTime(xml: Node) = {
-    val time = xml \\ "span" filter (n => n \ "@id" equals "serverTime") toString
-    val date = xml \\ "span" filter (n => n \ "@id" equals "serverDate") toString
+    val time = xml \\ "span" filter (n => (n \ "@id").text equals "serverTime") text
+    val date = xml \\ "span" filter (n => (n \ "@id").text equals "serverDate") text
 
     val format = new SimpleDateFormat("HH:mm:ssdd/MM/yyyy")
     new Date(format.parse(time + date).getTime())
@@ -187,37 +184,42 @@ object Main extends AppDatabase {
 
       DB withSession {
         val player = Players.byName(s.user.userName).get
-
-        for (
-          xml <- screenXML(Screens.VillageOverview);
-          nowO <- parseServerTime(xml).success;
-          gdata <- parseGameData(xml).success
-        ) {
+      }
+      
+      for (xml <- screenXML(Screens.VillageOverview)) yield {
+        val nowO = parseServerTime(xml)
+        val gdata = parseGameData(xml)
 //          println(gdata.village)
 //          val un:List[VillageUnit] = Query(VillageUnits) filter(_.villID is gdata.village.id) list;
 //          un foreach println
+        DB withSession {
+          println(s"saving buildings & speicher for village: ${gdata.village.name}")
           for (b <- gdata.village.gebaeude) {
             val building = VillageBuilding(gdata.village.id, b.typ, b.stufe)
             VillageBuildings.save(building, nowO)
           }
           
-          val spei = gdata.village.speicher          
+          val spei = gdata.village.speicher       
           VillagesResources.save(VillageResources(gdata.village.id, nowO, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
-
-          for (
-            vill <- parseVillages(gdata.player, xml);
-            xml2 <- screenVilXML(vill, Screens.Train);
-            now <- parseServerTime(xml2).success;
-            units <- parseUnitCounts(vill, xml2)
-          ) {
-            val unit = VillageUnit(gdata.village.id, units._1, units._2._2)
-            VillageUnits.save(unit, now)
-          }
         }
+        
+        parseVillages(gdata.player, xml) map {vill =>
+          for (xml2 <- screenVilXML(vill, Screens.Train)) yield {
+            val now = parseServerTime(xml2)
+            println(s"saving units for village: ${gdata.village.name}")
+            for (unit <- parseUnitCounts(vill, xml2)){
+              DB withSession {
+                val dbunit = VillageUnit(gdata.village.id, unit._1, unit._2._2)
+                VillageUnits.save(dbunit, now)
+              }
+            }
+          }
+        } 
       }
     }
+    val a = f.flatten flatMap(s => Future.sequence(s))
 
-    Await.ready(f, 1 day)
+    Await.ready(a, 1 day)
 
     //     val q = Query(Villages) filter (_.ownerID isNull) sortBy (x => {
     //                val dx = x.x - v.x
@@ -225,6 +227,8 @@ object Main extends AppDatabase {
     //                (dx * dx + dy * dy)
     //              })
     //    Await.ready(f, 1 day)
+    //    
+    
   }
 
 }
