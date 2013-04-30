@@ -21,7 +21,7 @@ trait AppDatabase {
   }
 
   def initializeDB() = {  
-    var tables:Seq[Table[_<:Any]] = Seq(Players, Staemme, Villages)
+    var tables:Seq[Table[_<:Any]] = Seq(Players, Staemme, Villages, Berichte, VillageBuildings, VillageUnits, VillagesResources)
     
     DB withTransaction {
       var ddl = tables map(_.ddl) reduce((a,b) => a ++ b)
