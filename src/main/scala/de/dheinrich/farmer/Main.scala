@@ -193,26 +193,26 @@ object Main extends AppDatabase {
           nowO <- parseServerTime(xml).success;
           gdata <- parseGameData(xml).success
         ) {
-          println(gdata.village)
-          val un:List[VillageUnit] = Query(VillageUnits) filter(_.villID is gdata.village.id) list;
-          un foreach println
-//          for (b <- gdata.village.gebaeude) {
-//            val building = VillageBuilding(gdata.village.id, b.typ, b.stufe)
-//            VillageBuildings.save(building, nowO)
-//          }
-//          
-//          val spei = gdata.village.speicher          
-//          VillagesResources.save(VillageResources(gdata.village.id, nowO, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
-//
-//          for (
-//            vill <- parseVillages(gdata.player, xml);
-//            xml2 <- screenVilXML(vill, Screens.Train);
-//            now <- parseServerTime(xml2).success;
-//            units <- parseUnitCounts(vill, xml2)
-//          ) {
-//            val unit = VillageUnit(gdata.village.id, units._1, units._2._2)
-//            VillageUnits.save(unit, now)
-//          }
+//          println(gdata.village)
+//          val un:List[VillageUnit] = Query(VillageUnits) filter(_.villID is gdata.village.id) list;
+//          un foreach println
+          for (b <- gdata.village.gebaeude) {
+            val building = VillageBuilding(gdata.village.id, b.typ, b.stufe)
+            VillageBuildings.save(building, nowO)
+          }
+          
+          val spei = gdata.village.speicher          
+          VillagesResources.save(VillageResources(gdata.village.id, nowO, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
+
+          for (
+            vill <- parseVillages(gdata.player, xml);
+            xml2 <- screenVilXML(vill, Screens.Train);
+            now <- parseServerTime(xml2).success;
+            units <- parseUnitCounts(vill, xml2)
+          ) {
+            val unit = VillageUnit(gdata.village.id, units._1, units._2._2)
+            VillageUnits.save(unit, now)
+          }
         }
       }
     }

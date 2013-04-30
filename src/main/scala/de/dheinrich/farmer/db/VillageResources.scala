@@ -6,7 +6,7 @@ import de.dheinrich.farmer.Units
 import de.dheinrich.farmer.Buildings
 
 case class VillageBuilding(villID: Int, buildingType: Buildings.Value, value: Int)
-object VillageBuildings extends Table[VillageBuilding]("VILLAGE_UNITS") {
+object VillageBuildings extends Table[VillageBuilding]("VILLAGE_BUILDINGS") {
 
   implicit val mapper = MappedTypeMapper.base[Buildings.Value, Int](_.id, Buildings(_: Int))
 
@@ -14,8 +14,8 @@ object VillageBuildings extends Table[VillageBuilding]("VILLAGE_UNITS") {
   def buildingType = column[Buildings.Value]("TYPE")
   def value = column[Int]("HOLZ")
 
-  def village = foreignKey("VILL_FK", villID, Villages)(_.id)
-  def idx1 = index("idx1", villID ~ buildingType, unique = true)
+  def village = foreignKey("VILL_BUILD_FK", villID, Villages)(_.id)
+  def idx1 = index("VB_IDX1", villID ~ buildingType, unique = true)
 
   def * = villID ~ buildingType ~ value <> (VillageBuilding, VillageBuilding.unapply _)
 
@@ -36,8 +36,8 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
   def unitType = column[Units.Value]("TYPE")
   def value = column[Int]("HOLZ")
 
-  def village = foreignKey("VILL_FK", villID, Villages)(_.id)
-  def idx1 = index("idx1", villID ~ unitType, unique = true)
+  def village = foreignKey("VILL_UNIT_FK", villID, Villages)(_.id)
+  def idx1 = index("VU_IDX1", villID ~ unitType, unique = true)
 
   def * = villID ~ unitType ~ value <> (VillageUnit, VillageUnit.unapply _)
 
@@ -51,7 +51,7 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
 
 case class VillageResources(villID: Int, lastUpdate: Date, holz: Int, lehm: Int, eisen: Int)
 object VillagesResources extends Table[VillageResources]("VILLAGE_RESOURCES") {
-  def villID = column[Int]("VILL_ID", O.PrimaryKey)
+  def villID = column[Int]("VILL_RES_ID", O.PrimaryKey)
   def lastUpdate = column[Date]("LAST_UPDATE")
 
   def holz = column[Int]("HOLZ")
