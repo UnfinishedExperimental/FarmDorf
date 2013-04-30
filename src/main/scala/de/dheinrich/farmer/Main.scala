@@ -47,13 +47,6 @@ import de.dheinrich.farmer.db.VillagesResources
 import de.dheinrich.farmer.db.VillageUnits
 import de.dheinrich.farmer.db.VillageUnit
 
-object Test {
-  val name = "King Henry 8th"
-  val pwd = "084021442"
-  val pwdHash = "4802ae031febb916d20a61005a5a3f86c93c0738"
-  val server = "de92"
-}
-
 object Main extends AppDatabase {
 
   initializeDB
