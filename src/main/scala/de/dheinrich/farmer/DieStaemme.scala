@@ -22,6 +22,7 @@ import java.util.Date
 import org.json4s.JsonAST._
 import scalaz._
 import Scalaz._
+import de.dheinrich.farmer.Report
 
 object DieStaemme {
 
@@ -122,11 +123,22 @@ object DieStaemme {
     private def screenR(screen: Screens.Value) = game <<? ("screen" -> screen.toString)
     private def vilScreen(screen: Screens.Value, id: Int) = screenR(screen) <<? "village" -> id.toString
 
-    def screenRequest(screen: Screens.Value) = execute(screenR(screen))
+    def screenRequest[A](screen: Screens.Value @@ A): Future[Response] @@ A = Tag(execute(screenR(screen)))
 
-    def villagePage(v: Village, screen: Screens.Value) = execute(vilScreen(screen, v.id))
-    def villageOverview(v: Village) = villagePage(v, Screens.Overview)
+    private val pageItemCount = 12
+    def reportOverview(page: Int): Future[Response] @@ ReportOverview = {
+      val from = page * pageItemCount
+      val req = game <<? Seq("screen" -> Screens.Report.toString, "mode" -> "attack", "from" -> from.toString)
+      Tag(execute(req))
+    }
     
+    def reportRequest(id: Int): Future[Response] @@ Report = {
+      val req = game <<? Seq("screen" -> Screens.Report.toString, "view" -> id.toString)
+      Tag(execute(req))
+    }
+
+    def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Response] @@ A = Tag(execute(vilScreen(screen, v.id)))
+
     //map stuff
     def querryMap(range: (Range, Range)) = execute {
       def mod(ra: Range) = {

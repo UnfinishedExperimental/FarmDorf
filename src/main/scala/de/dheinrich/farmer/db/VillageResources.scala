@@ -41,11 +41,13 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
 
   def * = villID ~ unitType ~ value <> (VillageUnit, VillageUnit.unapply _)
 
-  def save(v: VillageUnit, date: Date)(implicit session: Session) = {
-    val a = Query(VillageUnits) filter (_.villID is v.villID) filter (_.unitType is v.unitType) update v
-    if (a == 0)
-      * insert v
-    Villages.unitsUpdated(v.villID, date)
+  def save(date: Date, units: VillageUnit*)(implicit session: Session) = {
+    units foreach { v =>
+      val a = Query(VillageUnits) filter (_.villID is v.villID) filter (_.unitType is v.unitType) update v
+      if (a == 0)
+        * insert v
+    }
+    Villages.unitsUpdated(units(0).villID, date)
   }
 }
 

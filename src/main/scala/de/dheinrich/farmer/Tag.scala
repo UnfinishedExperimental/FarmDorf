@@ -3,6 +3,8 @@ package scalaz
 object Tag {
   // TODO According to Miles, @specialized doesn't help here. Maybe manually specialize.
   @inline def apply[@specialized A, T](a: A): A @@ T = a.asInstanceOf[A @@ T]
+  
+  @inline def it[@specialized A, T](a: A): A @@ T = apply(a)
 
   def subst[A, F[_], T](fa: F[A])(implicit F: Functor[F]): F[A @@ T] = fa.asInstanceOf[F[A @@ T]]
 
