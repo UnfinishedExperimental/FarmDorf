@@ -8,49 +8,23 @@ import com.ning.http.client.Response
 import com.ning.http.client.Cookie
 import scala.collection.mutable.Buffer
 import scala.xml.Node
-import json.JsonVillage
-import json.JsonPlayer
-import json.JsonGameData
-import json.JsonGameData
-import java.nio.file.Files
-import com.sun.org.apache.bcel.internal.util.ClassLoader
-import json.JsonVillage
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.databind.JsonNode
 import json.JsonMapSektor
-import de.dheinrich.farmer.db.AppDatabase
 import scala.slick.driver.HsqldbDriver.simple._
 import Database.threadLocalSession
-import de.dheinrich.farmer.db.Staemme
-import de.dheinrich.farmer.db.Players
-import de.dheinrich.farmer.db.Villages
+import de.dheinrich.farmer.db._
 import scala.concurrent.Await
 import scala.concurrent.duration._
-import de.dheinrich.farmer.db.Stamm
-import de.dheinrich.farmer.json.JsonMapper
-import java.io.File
-import de.dheinrich.farmer.db.Village
 import scala.concurrent.Promise
 import scala.concurrent.Future
+import de.dheinrich.farmer.json._
+import java.io.File
 import scalaz._
 import Scalaz._
 import Tag._
-import de.dheinrich.farmer.json.JsonMapVillage
 import java.text.SimpleDateFormat
 import java.sql.Date
-import de.dheinrich.farmer.db.Village
-import de.dheinrich.farmer.db.Player
-import de.dheinrich.farmer.json.JsonPlayer
-import de.dheinrich.farmer.db.VillageBuildings
-import de.dheinrich.farmer.db.VillageBuilding
-import de.dheinrich.farmer.db.VillageResources
-import de.dheinrich.farmer.db.VillagesResources
-import de.dheinrich.farmer.db.VillageUnits
-import de.dheinrich.farmer.db.VillageUnit
-import de.dheinrich.farmer.json.JsonGameData
-import de.dheinrich.farmer.json.JsonGameData
-import de.dheinrich.farmer.db.Berichte
-import de.dheinrich.farmer.db.Bericht
 
 object Main extends AppDatabase {
 
@@ -109,20 +83,6 @@ object Main extends AppDatabase {
       Units.withName(unitType) -> (there.toInt, total.toInt)
     }
   }
-
-  //  def screenXML[A](descr: Screens.Value @@ A): Future[Node @@ A] = {
-  //    for (
-  //      s <- sessFuture;
-  //      r <- s.screenRequest(descr)
-  //    ) yield Tag(HTML5Parser.loadXML(r.getResponseBody()))
-  //  }
-  //
-  //  def screenVilXML[A](v: Village, descr: Screens.Value @@ A): Future[Node @@ A] = {
-  //    for (
-  //      s <- sessFuture;
-  //      r <- s.villagePage(v, descr)
-  //    ) yield Tag(HTML5Parser.loadXML(r.getResponseBody()))
-  //  }
 
   def getXML[A](request: DieStaemme.Session => Future[Response] @@ A): Future[Node @@ A] = {
     for (
@@ -232,11 +192,7 @@ object Main extends AppDatabase {
     reports map parseReportID
   }
 
-  def parseReportVillages(xml: Node @@ Report) = {
-    val s = xml \\ "span" \\ "@data-id" size
-    
-   if(s != 2) println(xml)
-    
+  def parseReportVillages(xml: Node @@ Report) = {    
     val Seq(attacker, defender) = xml \\ "span" \\ "@data-id" map (_.text.toInt)
     (attacker, defender)
   }
@@ -283,14 +239,15 @@ object Main extends AppDatabase {
           val futRes = futBericht map parseReportResources
           val futVil = futBericht map parseReportVillages
          
-          for (vil <- futVil; res <- futRes) yield {            
+          val a = for (vil <- futVil; res <- futRes) yield {            
             println(s"parsing report #${t._1}")
             Bericht(t._1, t._2, vil._1, vil._2, res._1, res._2, res._3)
           }
+          for(ex <- a.either.left) {println(t._1);println(futBericht())}
+          a
         }
 
         val a = Future.sequence(dbBerichte)
-        for(c <- a.either) println(c)
         val b = a()
 
         if (ids.size == toParse.size && page + 1 < count) {
