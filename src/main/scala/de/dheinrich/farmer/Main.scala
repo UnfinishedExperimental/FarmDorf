@@ -25,6 +25,7 @@ import Scalaz._
 import Tag._
 import java.text.SimpleDateFormat
 import java.sql.Date
+import java.sql.Timestamp
 
 object Main extends AppDatabase {
 
@@ -107,7 +108,7 @@ object Main extends AppDatabase {
 
   def parseDate(text: String, pattern: String) = {
     val format = new SimpleDateFormat(pattern)
-    new Date(format.parse(text).getTime())
+    new Timestamp(format.parse(text).getTime())
   }
 
   def populateDB = {
@@ -118,7 +119,7 @@ object Main extends AppDatabase {
     ) yield {
       println("time to load " + (System.currentTimeMillis() - time))
 
-      val now = new Date(new java.util.Date().getTime())
+      val now = new Timestamp(new java.util.Date().getTime())
 
       DB withSession {
         Query(Villages).mutate(_.delete)
@@ -152,16 +153,17 @@ object Main extends AppDatabase {
     }
   }
 
-  def saveGameDate(gdata: JsonGameData, now: Date) = {
+  def saveGameDate(gdata: JsonGameData, now: Timestamp) = {
     DB withSession {
       println(s"saving buildings & speicher for village: ${gdata.village.name}")
-      for (b <- gdata.village.gebaeude) {
-        val building = VillageBuilding(gdata.village.id, b.typ, b.stufe)
-        VillageBuildings.save(building, now)
-      }
 
-      val spei = gdata.village.speicher
-      VillagesResources.save(VillageResources(gdata.village.id, now, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
+      DB withSession {
+        val builds = gdata.village.gebaeude map (b => VillageBuilding(gdata.village.id, b.typ, b.stufe))
+        VillageBuildings.save(now, builds.toSeq: _*)
+
+        import gdata.village.speicher
+        VillagesResources.save(VillageResources(gdata.village.id, now, speicher.holz.amount, speicher.lehm.amount, speicher.eisen.amount))
+      }
     }
   }
 
@@ -192,16 +194,21 @@ object Main extends AppDatabase {
     reports map parseReportID
   }
 
-  def parseReportVillages(xml: Node @@ Report) = {    
+  def parseReportVillages(xml: Node @@ Report) = {
     val Seq(attacker, defender) = xml \\ "span" \\ "@data-id" map (_.text.toInt)
     (attacker, defender)
   }
 
-  private val resPattern = """ (\d+)\s+(\d+)\s+(\d+)\s+([\d\.]+)/([\d\.]+)""".r
+  private val resPattern = """ ([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)/([\d\.]+)""".r
   def parseReportResources(xml: Node @@ Report) = {
-    val res = (xml \\ "table" filter (n => (n \ "@id").text equals "attack_results")) \ "tbody" \ "tr" \ "td" text
-    val resPattern(holz, lehm, eisen, took, could) = res
-    (holz.toInt, lehm.toInt, eisen.toInt)
+    val res = (xml \\ "table" filter (n => (n \ "@id").text equals "attack_results")) \ "tbody" \ "tr" \ "td" text;
+
+    val opRes = Some(res) filter (!_.isEmpty())
+    opRes map { r =>
+      val p = (1 to 5) map resPattern.findFirstMatchIn(r).get.group map (_.replace(".", "").toInt)
+      val Seq(holz, lehm, eisen, took, could) = p
+      (holz.toInt, lehm.toInt, eisen.toInt)
+    }
   }
 
   def updatePlayerVillages = {
@@ -218,42 +225,41 @@ object Main extends AppDatabase {
     Await.ready(futSavedUnits, 1 day)
     Await.ready(futSavedGameData, 1 day)
   }
-
-  def main(args: Array[String]): Unit = {
-    //    populateDB
-
+  
+  def updateBerichte ={
     val futXml = getXML(_.reportOverview(0))
+    val newest = DB withSession { Query(Berichte).sortBy(_.date desc) firstOption }
 
-    val newest = DB withSession { Query(Berichte).sortBy(_.date) firstOption }
     val futCount = futXml map parseReportPageCount
 
     val futFirstIDs = futXml map parseReportIDsFromPage
 
     val futBerichte = for (count <- futCount) yield {
-      def parseAndSave(futIDs: Future[Seq[(Int, Date)]], page: Int): Future[Seq[Bericht]] = for (ids <- futIDs) yield {
+      def parseAndSave(futIDs: Future[Seq[(Int, Timestamp)]], page: Int): Future[Seq[Bericht]] = for (ids <- futIDs) yield {
         println(s"parsing report page $page")
-        val toParse = ids filter (t => newest.map(_.date before t._2).getOrElse(true))
+        val toParse = ids filter (t => newest.map(t._2 after _.date).getOrElse(true))
 
         val dbBerichte = toParse map { t =>
           val futBericht = getXML(_.reportRequest(t._1))
           val futRes = futBericht map parseReportResources
           val futVil = futBericht map parseReportVillages
-         
-          val a = for (vil <- futVil; res <- futRes) yield {            
+
+          val a = for (vil <- futVil; res <- futRes) yield {
             println(s"parsing report #${t._1}")
-            Bericht(t._1, t._2, vil._1, vil._2, res._1, res._2, res._3)
+            val r = res getOrElse (0, 0, 0)
+            Bericht(t._1, t._2, vil._1, vil._2, r._1, r._2, r._3)
           }
-          for(ex <- a.either.left) {println(t._1);println(futBericht())}
+          for (ex <- a.either.left) { println(t._1); ex.printStackTrace() }
           a
         }
 
         val a = Future.sequence(dbBerichte)
-        val b = a()
+        var b = a()
 
         if (ids.size == toParse.size && page + 1 < count) {
           val futXml = getXML(_.reportOverview(page + 1))
           val futNewIDs = futXml map parseReportIDsFromPage
-          b ++ parseAndSave(futNewIDs, page + 1)()
+          b = b ++ parseAndSave(futNewIDs, page + 1)()
         }
         b
       }
@@ -269,6 +275,14 @@ object Main extends AppDatabase {
     }
 
     Await.ready(futSave, 1 day)
+  }
+
+  def main(args: Array[String]): Unit = {
+//    populateDB
+
+    updateBerichte
+    updatePlayerVillages
+    
 
     //     val q = Query(Villages) filter (_.ownerID isNull) sortBy (x => {
     //                val dx = x.x - v.x

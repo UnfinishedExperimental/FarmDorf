@@ -2,14 +2,15 @@ package de.dheinrich.farmer.db
 
 import scala.slick.driver.HsqldbDriver.simple._
 import java.sql.Date
+import java.sql.Timestamp
 
-case class Bericht(id: Int, date: Date, attackerID: Int, defenderID: Int, holz: Int, lehm: Int, eisen: Int)
+case class Bericht(id: Int, date: Timestamp, attackerID: Int, defenderID: Int, holz: Int, lehm: Int, eisen: Int)
 
 object Berichte extends Table[Bericht]("BERICHTE") {
   def id = column[Int]("ID", O.PrimaryKey)
   def attackerID = column[Int]("ATTACKER_ID")
   def defenderID = column[Int]("DEFENDER_ID")
-  def date = column[Date]("DATE")
+  def date = column[Timestamp]("DATE")
   def holz = column[Int]("HOLZ")
   def lehm = column[Int]("LEHM")
   def eisen = column[Int]("EISEN")

@@ -1,14 +1,14 @@
 package de.dheinrich.farmer.db
 
 import scala.slick.driver.HsqldbDriver.simple._
-import java.sql.Date
+import java.sql.Timestamp
 
 private object Time{
-  val old = new Date(0)
+  val old = new Timestamp(0)
 }
 
 case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
-  lastUpdate: Date = Time.old, lastUnitUp: Date = Time.old, lastBuildingsUp: Date = Time.old) {
+  lastUpdate: Timestamp = Time.old, lastUnitUp: Timestamp = Time.old, lastBuildingsUp: Timestamp = Time.old) {
   def buildings(implicit session: Session) = Query(VillageBuildings) filter (_.villID is id) list
   def units(implicit session: Session) = Query(VillageUnits) filter (_.villID is id) list
   def resources(implicit session: Session) = Query(VillagesResources) filter (_.villID is id) list
@@ -19,9 +19,9 @@ object Villages extends Table[Village]("VILLAGES") {
   def ownerID = column[Option[Int]]("OWNER_ID")
   def name = column[String]("NAME")
 
-  def lastUpdate = column[Date]("LAST_UPDATE")
-  def lastUpdateUnits = column[Date]("LAST_UPDATE_UNITS")
-  def lastUpdateBuildings = column[Date]("LAST_UPDATE_BUILDINGS")
+  def lastUpdate = column[Timestamp]("LAST_UPDATE")
+  def lastUpdateUnits = column[Timestamp]("LAST_UPDATE_UNITS")
+  def lastUpdateBuildings = column[Timestamp]("LAST_UPDATE_BUILDINGS")
 
   def x = column[Int]("X")
   def y = column[Int]("Y")
@@ -29,6 +29,7 @@ object Villages extends Table[Village]("VILLAGES") {
   def points = column[Int]("POINTS")
   def mood = column[Int]("MOOD", O.Default(100))
 
+  def owner = foreignKey("village_player_fk", ownerID, Players)(_.id.?) 
   def pk = index("IDX_COORD", (x, y), unique = true)
 
   def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood ~ lastUpdate ~ lastUpdateUnits ~ lastUpdateBuildings <> (Village, Village.unapply _)
@@ -45,6 +46,6 @@ object Villages extends Table[Village]("VILLAGES") {
       * insert v
   }
   
-  def unitsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateUnits) update(date)
-  def buildingsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateBuildings) update(date)
+  def unitsUpdated(vid:Int, date:Timestamp)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateUnits) update(date)
+  def buildingsUpdated(vid:Int, date:Timestamp)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateBuildings) update(date)
 }

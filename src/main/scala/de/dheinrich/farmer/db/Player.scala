@@ -12,10 +12,12 @@ object Players extends Table[Player]("PLAYERS") {
   def id = column[Int]("ID", O.PrimaryKey)
   def name = column[String]("NAME")
   def points = column[Int]("PUNKTE")
-  def stammID = column[Int]("STAMM_ID", O.Nullable)
+  def stammID = column[Option[Int]]("STAMM_ID")
   def schutz = column[Option[Date]]("SCHUTZ")
   
-  def * = id ~ name ~ points ~ stammID.? ~ schutz <> (Player, Player.unapply _)
+  def stamm = foreignKey("player_stamm_fk", stammID, Staemme)(_.id.?) 
+   
+  def * = id ~ name ~ points ~ stammID ~ schutz <> (Player, Player.unapply _)
   
   def byStamm(stamm:Stamm)(implicit session: Session) = Query(Players) filter(_.stammID is stamm.id)
   

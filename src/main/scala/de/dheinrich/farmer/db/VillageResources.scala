@@ -1,7 +1,7 @@
 package de.dheinrich.farmer.db
 
 import scala.slick.driver.HsqldbDriver.simple._
-import java.sql.Date
+import java.sql.Timestamp
 import de.dheinrich.farmer.Units
 import de.dheinrich.farmer.Buildings
 
@@ -19,11 +19,16 @@ object VillageBuildings extends Table[VillageBuilding]("VILLAGE_BUILDINGS") {
 
   def * = villID ~ buildingType ~ value <> (VillageBuilding, VillageBuilding.unapply _)
 
-  def save(v: VillageBuilding, date: Date)(implicit session: Session) = {
-    val a = Query(VillageBuildings) filter (_.villID is v.villID) filter (_.buildingType is v.buildingType) update v
-    if (a == 0)
-      * insert v
-    Villages.buildingsUpdated(v.villID, date)
+  def save(date: Timestamp, buildings: VillageBuilding*)(implicit session: Session) = {
+    buildings foreach { v =>
+      val q = for(buil <- VillageBuildings
+          if buil.villID is v.villID
+          if buil.buildingType is v.buildingType)yield buil
+      val a = q update v//Query(VillageBuildings).filter.(_.villID is v.villID) filter (_.buildingType is v.buildingType) update v
+      if (a == 0)
+        * insert v
+    }
+    Villages.buildingsUpdated(buildings(0).villID, date)
   }
 }
 
@@ -41,7 +46,7 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
 
   def * = villID ~ unitType ~ value <> (VillageUnit, VillageUnit.unapply _)
 
-  def save(date: Date, units: VillageUnit*)(implicit session: Session) = {
+  def save(date: Timestamp, units: VillageUnit*)(implicit session: Session) = {
     units foreach { v =>
       val a = Query(VillageUnits) filter (_.villID is v.villID) filter (_.unitType is v.unitType) update v
       if (a == 0)
@@ -51,10 +56,10 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
   }
 }
 
-case class VillageResources(villID: Int, lastUpdate: Date, holz: Int, lehm: Int, eisen: Int)
+case class VillageResources(villID: Int, lastUpdate: Timestamp, holz: Int, lehm: Int, eisen: Int)
 object VillagesResources extends Table[VillageResources]("VILLAGE_RESOURCES") {
   def villID = column[Int]("VILL_RES_ID", O.PrimaryKey)
-  def lastUpdate = column[Date]("LAST_UPDATE")
+  def lastUpdate = column[Timestamp]("LAST_UPDATE")
 
   def holz = column[Int]("HOLZ")
   def lehm = column[Int]("LEHM")
