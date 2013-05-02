@@ -51,10 +51,10 @@ object Main extends AppDatabase {
 
     val idPattern = """label_text_(\d+)""".r
     val otherPattern = """(.+) \((\d+)\|(\d+)\).*""".r
-    def parseVillageRow(n: Node) = {
+    def parseVillageRow(n: Node): Village = {
       val idPattern(id) = (n \ "@id").text
       val otherPattern(name, x, y) = n.text
-      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = now)
+      return Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = now)
     }
 
     //find all tags of the following form: <span id="label_text_45048">London (409|693) K64</span>
@@ -64,10 +64,7 @@ object Main extends AppDatabase {
 
     villages map { v =>
       DB withSession {
-        Query(Villages).filter(_.id is v.id) firstOption match {
-          case Some(c) => c
-          case _ => Villages.*.insert(v); v
-        }
+        Villages updateNameOwner (v, now)
       }
     }
   }
@@ -225,8 +222,8 @@ object Main extends AppDatabase {
     Await.ready(futSavedUnits, 1 day)
     Await.ready(futSavedGameData, 1 day)
   }
-  
-  def updateBerichte ={
+
+  def updateBerichte = {
     val futXml = getXML(_.reportOverview(0))
     val newest = DB withSession { Query(Berichte).sortBy(_.date desc) firstOption }
 
@@ -278,11 +275,58 @@ object Main extends AppDatabase {
   }
 
   def main(args: Array[String]): Unit = {
-//    populateDB
+    //    populateDB
 
-    updateBerichte
-    updatePlayerVillages
-    
+    //    updateBerichte
+    //    updatePlayerVillages
+
+    DB withSession {
+      val q = for (b <- Berichte) yield (b.holz + b.lehm + b.eisen)
+      println(q.list.sum)
+
+      val q2 = Query(Berichte) groupBy (_.defenderID)
+
+          println(q2.selectStatement)
+          
+//      q2 map {
+//        case (vilID, bs) => {
+//          val res = Query(VillagesResources).filter(_.villID is vilID).firstOption
+//          val lu = res map (_.lastUpdate) getOrElse (new Timestamp(0))
+//          val newer = bs.filter(_.date > lu)
+//          val stolenRes = newer.map(b => (b.holz, b.lehm, b.eisen)).foldLeft((0, 0, 0))(_ |+| _)
+//
+//          println((vilID,stolenRes))
+//        }
+//      }
+
+            val q3 = for (((vilID, bs), res) <- q2 leftJoin VillagesResources on (_._1 is _.villID)) yield{
+              val qq = for(b <- bs if b.date > res.lastUpdate.?)) yield b
+              
+//              val holz = res.holz.?.getOrElse(0) - qq.map(_.holz).sum 
+//              val lehm = res.lehm.?.getOrElse(0) - qq.map(_.lehm).sum 
+//              val eisen = res.eisen.?.getOrElse(0) - qq.map(_.eisen).sum 
+              
+             qq.map(_.holz).sum 
+            }
+            
+//            {
+//              val newer = bs.filter(b => (res.lastUpdate.? isNull) || (b.date > res.lastUpdate))
+//              val stolenRes = newer.map(_.holz).sum
+//              (vilID, stolenRes)
+//            }
+      
+      q3.list foreach println
+
+    }
+
+    //    DB withSession {
+    //      val q = Query(Villages) groupBy { v =>
+    //        (v.x / 20, v.y / 20)
+    //      }
+    //      val q2 = q map { case ((x, y), vills) => (vills map (_.lastUpdate) max, vills map (_.x) min, vills map (_.y) min) }
+    //      println(q2.selectStatement)
+    //      q2.list map(d=>(d._1, d._2 map(_ / 20), d._3  map(_ / 20))) foreach println
+    //    }
 
     //     val q = Query(Villages) filter (_.ownerID isNull) sortBy (x => {
     //                val dx = x.x - v.x

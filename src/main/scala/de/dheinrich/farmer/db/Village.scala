@@ -3,7 +3,7 @@ package de.dheinrich.farmer.db
 import scala.slick.driver.HsqldbDriver.simple._
 import java.sql.Timestamp
 
-private object Time{
+private object Time {
   val old = new Timestamp(0)
 }
 
@@ -29,7 +29,7 @@ object Villages extends Table[Village]("VILLAGES") {
   def points = column[Int]("POINTS")
   def mood = column[Int]("MOOD", O.Default(100))
 
-  def owner = foreignKey("village_player_fk", ownerID, Players)(_.id.?) 
+  def owner = foreignKey("village_player_fk", ownerID, Players)(_.id.?)
   def pk = index("IDX_COORD", (x, y), unique = true)
 
   def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood ~ lastUpdate ~ lastUpdateUnits ~ lastUpdateBuildings <> (Village, Village.unapply _)
@@ -45,7 +45,17 @@ object Villages extends Table[Village]("VILLAGES") {
     if (a == 0)
       * insert v
   }
-  
-  def unitsUpdated(vid:Int, date:Timestamp)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateUnits) update(date)
-  def buildingsUpdated(vid:Int, date:Timestamp)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateBuildings) update(date)
+
+  def updateNameOwner(v: Village, now: Timestamp)(implicit session: Session):Village = {
+    val q = for (vill <- Villages if vill.id is v.id) yield vill.ownerID ~ vill.name ~ vill.lastUpdate
+    val a = q.update(v.ownerID, v.name, now);
+    if (a == 0) {
+      * insert v
+      return v
+    } else
+      return byID(v.id).get
+  }
+
+  def unitsUpdated(vid: Int, date: Timestamp)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateUnits) update (date)
+  def buildingsUpdated(vid: Int, date: Timestamp)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateBuildings) update (date)
 }
