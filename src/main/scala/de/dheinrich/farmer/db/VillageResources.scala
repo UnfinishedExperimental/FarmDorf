@@ -39,7 +39,7 @@ object VillageUnits extends Table[VillageUnit]("VILLAGE_UNITS") {
 
   def villID = column[Int]("VILL_ID")
   def unitType = column[Units.Value]("TYPE")
-  def value = column[Int]("HOLZ")
+  def value = column[Int]("VALUE")
 
   def village = foreignKey("VILL_UNIT_FK", villID, Villages)(_.id)
   def idx1 = index("VU_IDX1", villID ~ unitType, unique = true)

@@ -107,7 +107,7 @@ object Main extends AppDatabase {
     val format = new SimpleDateFormat(pattern)
     new Timestamp(format.parse(text).getTime())
   }
-
+//
   def populateDB = {
     val time = System.currentTimeMillis()
     val f = for (
@@ -192,20 +192,47 @@ object Main extends AppDatabase {
   }
 
   def parseReportVillages(xml: Node @@ Report) = {
-    val Seq(attacker, defender) = xml \\ "span" \\ "@data-id" map (_.text.toInt)
+    val a = xml \\ "span" \\ "@data-id" map (_.text.toInt)
+    if(a.size == 0)println(xml)
+    val Seq(attacker, defender) =  xml \\ "span" \\ "@data-id" map (_.text.toInt)
     (attacker, defender)
   }
 
-  private val resPattern = """ ([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)/([\d\.]+)""".r
+  private val patTotalRes = """([\d\.]+)/([\d\.]+)""".r
+  private val patSingleRes = """(wood|iron|stone).{10}(\d+)(?:<span class="grey">\.</span>(\d+))?""".r
   def parseReportResources(xml: Node @@ Report) = {
-    val res = (xml \\ "table" filter (n => (n \ "@id").text equals "attack_results")) \ "tbody" \ "tr" \ "td" text;
+    val results = (xml \\ "table" filter (n => (n \ "@id").text equals "attack_results"))
+    if (results.isEmpty)
+      None
+    else {
+      val b = results \ "tbody" \ "tr"
+      val res = b \ "td" toString
 
-    val opRes = Some(res) filter (!_.isEmpty())
-    opRes map { r =>
-      val p = (1 to 5) map resPattern.findFirstMatchIn(r).get.group map (_.replace(".", "").toInt)
-      val Seq(holz, lehm, eisen, took, could) = p
-      (holz.toInt, lehm.toInt, eisen.toInt)
+      val matches = patSingleRes.findAllMatchIn(res)
+      val stolenRes = matches map { m =>
+        val a = m.group(2).toInt
+        val amount = Option(m.group(3)) map (_.toInt + 1000 * a) getOrElse a
+        m.group(1) -> amount
+      }
+
+      def parse(v: String) = v.replace(".", "").toInt
+
+      val totalText = (b \\ "td")(1) text
+      val patTotalRes(have, could) = totalText
+      Some(stolenRes, (parse(have), parse(could)))
     }
+  }
+
+  def parseReportUnits(xml: Node @@ Report) = {
+
+    def parseUnits(site: String) = {
+      val table = (xml \\ "table" filter (n => (n \ "@id").text equals site)) \ "tbody" \\ "tr"
+      val ex: Int => Seq[Int] = i => (table(i) \\ "td" tail) map (_.text.toInt)
+      val a = Units.values zip (ex(1) zip ex(2)) 
+      a filter(_._2._1 != 0)
+    }
+
+    Seq(parseUnits("attack_info_att_units"), parseUnits("attack_info_def_units"))
   }
 
   def updatePlayerVillages = {
@@ -224,6 +251,10 @@ object Main extends AppDatabase {
   }
 
   def updateBerichte = {
+    val HOLZ = "wood"
+    val LEHM = "stone"
+    val EISEN = "iron"
+
     val futXml = getXML(_.reportOverview(0))
     val newest = DB withSession { Query(Berichte).sortBy(_.date desc) firstOption }
 
@@ -232,42 +263,70 @@ object Main extends AppDatabase {
     val futFirstIDs = futXml map parseReportIDsFromPage
 
     val futBerichte = for (count <- futCount) yield {
-      def parseAndSave(futIDs: Future[Seq[(Int, Timestamp)]], page: Int): Future[Seq[Bericht]] = for (ids <- futIDs) yield {
+      def parseAndSave(futIDs: Future[Seq[(Int, Timestamp)]], page: Int): Future[Future[(Seq[Bericht], Seq[BerichtUnit])]] = for (ids <- futIDs) yield {
         println(s"parsing report page $page")
-        val toParse = ids filter (t => newest.map(t._2 after _.date).getOrElse(true))
+        val toParse = ids// filter (t => newest.map(t._2 after _.date).getOrElse(true))
 
-        val dbBerichte = toParse map { t =>
-          val futBericht = getXML(_.reportRequest(t._1))
+        val futXMLs = toParse map { t => (t._1, t._2, getXML(_.reportRequest(t._1))) }
+
+        val dbBerichte = for ((id, time, futBericht) <- futXMLs) yield {
           val futRes = futBericht map parseReportResources
           val futVil = futBericht map parseReportVillages
 
-          val a = for (vil <- futVil; res <- futRes) yield {
-            println(s"parsing report #${t._1}")
-            val r = res getOrElse (0, 0, 0)
-            Bericht(t._1, t._2, vil._1, vil._2, r._1, r._2, r._3)
+          for (vil <- futVil; res <- futRes) yield {
+            println(s"parsing report #$id")
+
+            val r = res map { b =>
+              val c = b._1.toMap
+              (c.getOrElse(HOLZ, 0), c.getOrElse(LEHM, 0), c.getOrElse(EISEN, 0), b._2._2)
+            } getOrElse (0, 0, 0, 0)
+            Bericht(id, time, vil._1, vil._2, r._1, r._2, r._3, r._4)
           }
-          for (ex <- a.either.left) { println(t._1); ex.printStackTrace() }
-          a
         }
 
-        val a = Future.sequence(dbBerichte)
-        var b = a()
+        val futDBRepUnits = Future sequence (
+          for ((id, time, futBericht) <- futXMLs) yield {
+            val futUnits = futBericht map parseReportUnits
+
+            for (units <- futUnits) yield {
+              (units zip Seq(true, false)) map { us =>
+                us._1 map { u => BerichtUnit(id, us._2, u._1, u._2._1, u._2._2) } toSeq
+              } flatten
+            }
+          }) map (_.flatten)
+
+        val futBerichte = Future.sequence(dbBerichte)
 
         if (ids.size == toParse.size && page + 1 < count) {
           val futXml = getXML(_.reportOverview(page + 1))
           val futNewIDs = futXml map parseReportIDsFromPage
-          b = b ++ parseAndSave(futNewIDs, page + 1)()
+
+          for (
+            berichte <- futBerichte;
+            units <- futDBRepUnits;
+            other <- parseAndSave(futNewIDs, page + 1).flatten
+          ) yield (berichte ++ other._1, units ++ other._2)
+        } else {
+          for (
+            berichte <- futBerichte;
+            units <- futDBRepUnits
+          ) yield (berichte, units)
         }
-        b
       }
 
-      parseAndSave(futFirstIDs, 0)
+      parseAndSave(futFirstIDs, 0).flatten
     }
+    
+    for(t <- futBerichte.flatten.either.left) t.printStackTrace()
 
     val futSave = futBerichte.flatten map { b =>
-      println(s"adding ${b.size} new reports")
+      println(s"adding ${b._1.size} new reports")
       DB withSession {
-        Berichte.*.insertAll(b.toSeq: _*)
+        Berichte.*.insertAll(b._1.toSeq: _*)
+      }
+      println(s"adding ${b._2.size} new report units")
+      DB withSession {
+        BerichtUnits.*.insertAll(b._2.toSeq: _*)
       }
     }
 
@@ -275,49 +334,49 @@ object Main extends AppDatabase {
   }
 
   def main(args: Array[String]): Unit = {
-    //    populateDB
+//        populateDB
 
-    //    updateBerichte
+    updateBerichte
     //    updatePlayerVillages
 
-    DB withSession {
-      val q = for (b <- Berichte) yield (b.holz + b.lehm + b.eisen)
-      println(q.list.sum)
-
-      val q2 = Query(Berichte) groupBy (_.defenderID)
-
-          println(q2.selectStatement)
-          
-//      q2 map {
+//    DB withSession {
+//      val q = for (b <- Berichte) yield (b.holz + b.lehm + b.eisen)
+//      println(q.list.sum)
+//
+//      val q2 = Query(Berichte) groupBy (_.defenderID)
+//
+//      println(q2.selectStatement)
+//
+//      val q3 = q2 map {
 //        case (vilID, bs) => {
 //          val res = Query(VillagesResources).filter(_.villID is vilID).firstOption
 //          val lu = res map (_.lastUpdate) getOrElse (new Timestamp(0))
 //          val newer = bs.filter(_.date > lu)
-//          val stolenRes = newer.map(b => (b.holz, b.lehm, b.eisen)).foldLeft((0, 0, 0))(_ |+| _)
+//          //          val stolenRes = newer.map(b => (b.holz, b.lehm, b.eisen)).foldLeft((0, 0, 0))(_ |+| _)
 //
-//          println((vilID,stolenRes))
+//          newer.count
 //        }
 //      }
 
-            val q3 = for (((vilID, bs), res) <- q2 leftJoin VillagesResources on (_._1 is _.villID)) yield{
-              val qq = for(b <- bs if b.date > res.lastUpdate.?)) yield b
-              
-//              val holz = res.holz.?.getOrElse(0) - qq.map(_.holz).sum 
-//              val lehm = res.lehm.?.getOrElse(0) - qq.map(_.lehm).sum 
-//              val eisen = res.eisen.?.getOrElse(0) - qq.map(_.eisen).sum 
-              
-             qq.map(_.holz).sum 
-            }
-            
-//            {
-//              val newer = bs.filter(b => (res.lastUpdate.? isNull) || (b.date > res.lastUpdate))
-//              val stolenRes = newer.map(_.holz).sum
-//              (vilID, stolenRes)
-//            }
-      
-      q3.list foreach println
+      //            val q3 = for (((vilID, bs), res) <- q2 leftJoin VillagesResources on (_._1 is _.villID)) yield{
+      //              val qq = for(b <- bs if b.date > res.lastUpdate.?)) yield b
+      //              
+      ////              val holz = res.holz.?.getOrElse(0) - qq.map(_.holz).sum 
+      ////              val lehm = res.lehm.?.getOrElse(0) - qq.map(_.lehm).sum 
+      ////              val eisen = res.eisen.?.getOrElse(0) - qq.map(_.eisen).sum 
+      //              
+      //             qq.map(_.holz).sum 
+      //            }
 
-    }
+      //            {
+      //              val newer = bs.filter(b => (res.lastUpdate.? isNull) || (b.date > res.lastUpdate))
+      //              val stolenRes = newer.map(_.holz).sum
+      //              (vilID, stolenRes)
+      //            }
+
+//      q3.list foreach println
+//
+//    }
 
     //    DB withSession {
     //      val q = Query(Villages) groupBy { v =>
