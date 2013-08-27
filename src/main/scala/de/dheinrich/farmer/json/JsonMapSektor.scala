@@ -8,31 +8,34 @@ import de.dheinrich.farmer.db.Stamm
 import de.dheinrich.farmer.db.Player
 import de.dheinrich.farmer.db.Village
 
+trait Parser {
+  def parse(i: Array[String])
+}
+
 case class JsonMapSektor(data: JsonMapData, tiles: Array[Array[Int]], x: Int, y: Int)
 
-@JsonIgnoreProperties(ignoreUnknown = true)
 case class JsonMapData(x: Int, y: Int) {
   var allies: Iterable[JsonAllie] = _
   var players: Iterable[JsonMapPlayer] = _
   var villages: Iterable[JsonMapVillage] = _
 
-  def setAllies(node: JsonNode) = allies = parse(node, JsonAllie(_))
+  def setAllies(node: JsonNode) { allies = parse(node, JsonAllie(_)) }
 
-  def setPlayers(node: JsonNode) = players = parse(node, JsonMapPlayer(_))
+  def setPlayers(node: JsonNode) { players = parse(node, JsonMapPlayer(_)) }
 
-  def parse[C <: { def parse(i: Array[String]) }](node: JsonNode, constructor: Int => C) =
-    parseAsArray(node) map { d => val a = constructor(d._1); a.parse(d._2 toArray); a } toIterable
+  def parse[C <: Parser](node: JsonNode, constructor: Int => C) =
+    parseAsArray(node) map { d => val a = constructor(d.y); a.parse(d.data); a } toIterable
 
   def setVillages(node: JsonNode) {
     val vs = for (
       row <- parseAsNodes(node);
-      village <- row._2
+      village <- row.sub
     ) yield {
-      val localX = row._1
-      val localY = village._1
+      val localX = row.x
+      val localY = village.y
 
       val v = JsonMapVillage(x + localX, y + localY)
-      v.parse(village._2 toArray)
+      v.parse(village.data)
       v
     }
     villages = vs toIterable
@@ -40,27 +43,37 @@ case class JsonMapData(x: Int, y: Int) {
 
   private def parseAsArray(node: JsonNode) = node.fields() map { f =>
     val id = f.getKey().toInt
-    val attributs = f.getValue map (_.asText())
+    val attributs = f.getValue() map (_.asText())
 
-    (id, attributs)
+    new { val y = id; val data = attributs.toArray }
   }
 
-  private def parseAsNodes(node: JsonNode) = node.fields() map { f =>
-    val id = f.getKey().toInt
-    val attributs = parseAsArray(f.getValue)
+  private def parseAsNodes(node: JsonNode) = {
+    if (node.isArray()) {
+      val el = node.elements
+      val indexed = el.zipWithIndex
 
-    (id, attributs)
+      for ((node, index) <- indexed) yield new {
+        val x = index
+        val sub = parseAsArray(node)
+      }
+    } else {
+      for(f <- node.fields()) yield new {
+        val x = f.getKey().toInt
+        val sub = parseAsArray(f.getValue)
+      }
+    }
   }
 
   override def toString() = {
     val a = allies.mkString(",")
     val p = players.mkString(",")
     val v = villages.mkString(",")
-    s"JsonMapData(allies:[$a],players:[$p],villages:[$v],x:$x,y:$y)"
+    s"JsonMapData(allies:[$a], players:[$p], villages:[$v], x:$x, y:$y)"
   }
 }
 
-case class JsonAllie(id: Int) {
+case class JsonAllie(id: Int) extends Parser {
   //  {name: v[0], points: v[1], tag: v[2]}
   var name: String = _
   var tag: String = _
@@ -77,7 +90,7 @@ case class JsonAllie(id: Int) {
   override def toString() = s"JsonAllie(id:$id,name:$name,tag:$tag,points:$points)"
 }
 
-case class JsonMapPlayer(id: Int) {
+case class JsonMapPlayer(id: Int) extends Parser {
   //  {name: v[0], points: v[1], ally: v[2], newbie: v[3], sleep: v[4]}
   var name: String = _
   var points: Int = _
@@ -124,7 +137,7 @@ case class JsonMapPlayer(id: Int) {
     s"allyID:$allyID,newbie:$newbie,sleep:$sleep)"
 }
 
-case class JsonMapVillage(x: Int, y: Int) {
+case class JsonMapVillage(x: Int, y: Int) extends Parser {
   var id: Int = _
   var imageID: Int = _
   var name: String = _

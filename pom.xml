@@ -20,7 +20,7 @@
 		<dependency>
 			<groupId>com.typesafe.slick</groupId>
 			<artifactId>slick_2.10</artifactId>
-			<version>1.0.0</version>
+			<version>1.0.1</version>
 		</dependency>
 		<dependency>
 			<groupId>org.hsqldb</groupId>
@@ -35,7 +35,7 @@
 		<dependency>
 			<groupId>org.scalafx</groupId>
 			<artifactId>scalafx_2.10</artifactId>
-			<version>1.0.0-M1</version>
+			<version>1.0.0-M3</version>
 		</dependency>
 		<dependency>
 			<groupId>com.fasterxml.jackson.module</groupId>

@@ -1,50 +1,56 @@
 package de.dheinrich.farmer.db
 
-import scala.slick.driver.HsqldbDriver.simple._
 import java.sql.Date
 
-private object Time{
+private object Time {
   val old = new Date(0)
 }
 
 case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
-  lastUpdate: Date = Time.old, lastUnitUp: Date = Time.old, lastBuildingsUp: Date = Time.old) {
-  def buildings(implicit session: Session) = Query(VillageBuildings) filter (_.villID is id) list
-  def units(implicit session: Session) = Query(VillageUnits) filter (_.villID is id) list
-  def resources(implicit session: Session) = Query(VillagesResources) filter (_.villID is id) list
-}
+  lastUpdate: Date = Time.old, lastUnitUp: Date = Time.old, lastBuildingsUp: Date = Time.old)
 
-object Villages extends Table[Village]("VILLAGES") {
-  def id = column[Int]("ID", O.PrimaryKey)
-  def ownerID = column[Option[Int]]("OWNER_ID")
-  def name = column[String]("NAME")
+trait VillagesComponent { this: DBProfile =>
+  import profile.simple._
 
-  def lastUpdate = column[Date]("LAST_UPDATE")
-  def lastUpdateUnits = column[Date]("LAST_UPDATE_UNITS")
-  def lastUpdateBuildings = column[Date]("LAST_UPDATE_BUILDINGS")
+  object Villages extends Table[Village]("VILLAGES") {
+    def id = column[Int]("ID", O.PrimaryKey)
+    def ownerID = column[Option[Int]]("OWNER_ID")
+    def name = column[String]("NAME")
 
-  def x = column[Int]("X")
-  def y = column[Int]("Y")
+    def lastUpdate = column[Date]("LAST_UPDATE")
+    def lastUpdateUnits = column[Date]("LAST_UPDATE_UNITS")
+    def lastUpdateBuildings = column[Date]("LAST_UPDATE_BUILDINGS")
 
-  def points = column[Int]("POINTS")
-  def mood = column[Int]("MOOD", O.Default(100))
+    def x = column[Int]("X")
+    def y = column[Int]("Y")
 
-  def pk = index("IDX_COORD", (x, y), unique = true)
+    def points = column[Int]("POINTS")
+    def mood = column[Int]("MOOD", O.Default(100))
 
-  def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood ~ lastUpdate ~ lastUpdateUnits ~ lastUpdateBuildings <> (Village, Village.unapply _)
+    def pk = index("IDX_COORD", (x, y), unique = true)
 
-  //Queries
-  def byID(id: Int)(implicit session: Session) = Query(Villages).filter(_.id is id).firstOption
+    def * = id ~ ownerID ~ name ~ x ~ y ~ points ~ mood ~ lastUpdate ~ lastUpdateUnits ~ lastUpdateBuildings <> (Village, Village.unapply _)
 
-  private val ownedVillages = for (pid <- Parameters[Int]; v <- Villages if v.ownerID is pid) yield v
-  def ofPlayer(player: Player) = ownedVillages(player.id)
+    //Queries
+    def byID(id: Int)(implicit session: Session) = Query(Villages).filter(_.id is id).firstOption
 
-  def save(v: Village)(implicit session: Session) = {
-    val a = Query(Villages) filter (_.id is v.id) update v
-    if (a == 0)
-      * insert v
+    private def ownedVillages(pid:Int) = for (v <- Villages if v.ownerID is pid) yield v
+    def ofPlayer(player: Player) = ownedVillages(player.id)
+
+    def save(v: Village)(implicit session: Session) = {
+      val a = Query(Villages) filter (_.id is v.id) update v
+      if (a == 0)
+        * insert v
+    }
+
+    def getOrInsert(v: Village)(implicit session: Session) = {
+      byID(v.id) match {
+        case Some(vi) => vi
+        case None => * insert v; v
+      }
+    }
+
+    def unitsUpdated(vid: Int, date: Date)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateUnits) update (date)
+    def buildingsUpdated(vid: Int, date: Date)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateBuildings) update (date)
   }
-  
-  def unitsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateUnits) update(date)
-  def buildingsUpdated(vid:Int, date:Date)(implicit session: Session) = (for(v <- Villages if v.id is vid)yield v.lastUpdateBuildings) update(date)
 }

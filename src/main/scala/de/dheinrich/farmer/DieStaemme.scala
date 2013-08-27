@@ -7,12 +7,10 @@ import com.ning.http.client.Cookie
 import com.ning.http.client.RequestBuilder
 import com.ning.http.client.Response
 import de.dheinrich.farmer.db.Village
-import de.dheinrich.farmer.json.JsonMapper
+import de.dheinrich.farmer.json.JsonMapper._
 import de.dheinrich.farmer.json.JsonMapSektor
 import dispatch.Defaults.executor
 import dispatch.Future
-import dispatch.Future
-import dispatch.Http
 import dispatch.as
 import dispatch.host
 import dispatch.implyRequestHandlerTuple
@@ -23,8 +21,12 @@ import org.json4s.JsonAST._
 import scalaz._
 import Scalaz._
 import de.dheinrich.farmer.Report
+import scala.concurrent._
+import java.net.URL
+import scala.annotation.tailrec
 
 object DieStaemme {
+  private val http = dispatch.Http.configure(_ setFollowRedirects true)
 
   private implicit def toSeq(a: (String, String)) = Seq(a)
   private val siteURL = ".die-staemme.de"
@@ -44,7 +46,7 @@ object DieStaemme {
     login(userName) <<? ("server_" + server, "") << ("password" -> passwordHash)
 
   def getLoginData(user: String, pw: String) = {
-    val r = Http(loginReq(user, pw) OK as.json4s.Json)
+    val r = http(loginReq(user, pw) OK as.json4s.Json)
     for (JObject(fields) <- r) yield {
       fields(0) match {
         case JField("res", JString(o)) => parseLoginData(o).success
@@ -95,7 +97,7 @@ object DieStaemme {
             url(host(respons.getUri().getHost()).url + re)
 
         cookies foreach request.addCookie _
-        Http(request).flatMap { a =>
+        dispatch.Http(request).flatMap { a =>
           redirectRec(a, cookies)
         }
       }
@@ -104,7 +106,7 @@ object DieStaemme {
   }
 
   def login(user: UserLogin): Future[Session] = {
-    val request = Http(directLoginReq(user.userName, user.passwordHash, user.world)) flatMap redirect _
+    val request = dispatch.Http(directLoginReq(user.userName, user.passwordHash, user.world)) flatMap redirect _
     request map (respons => Session(user, respons._2))
   }
 
@@ -115,7 +117,7 @@ object DieStaemme {
 
     private def execute(requ: RequestBuilder) = {
       cookies foreach requ.addCookie _
-      Http(requ) flatMap (r => redirectRec(r, cookies)) map (_._1)
+      http(requ)
     }
 
     def logout = execute(game <<? action("logout"))
@@ -131,7 +133,7 @@ object DieStaemme {
       val req = game <<? Seq("screen" -> Screens.Report.toString, "mode" -> "attack", "from" -> from.toString)
       Tag(execute(req))
     }
-    
+
     def reportRequest(id: Int): Future[Response] @@ Report = {
       val req = game <<? Seq("screen" -> Screens.Report.toString, "view" -> id.toString)
       Tag(execute(req))
@@ -140,23 +142,42 @@ object DieStaemme {
     def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Response] @@ A = Tag(execute(vilScreen(screen, v.id)))
 
     //map stuff
-    def querryMap(range: (Range, Range)) = execute {
+    val SEKTOR_SIZE = 20
+    val MAX_SEKTORS_REQUEST = 100
+    val WORLD_SIZE = 900
+
+    def queryWorld() = {
+      queryMap(0 until WORLD_SIZE, 0 until WORLD_SIZE)
+    }
+
+    def queryMap(xRange: Range, yRange: Range): Future[List[JsonMapSektor]] = {
       def mod(ra: Range) = {
-        val sektorSize = 20
-        (ra.start - ra.start % sektorSize) until (ra.lastElement + (sektorSize - ra.lastElement % sektorSize)) by 20
+        (ra.start - ra.start % SEKTOR_SIZE) until (ra.lastElement + (SEKTOR_SIZE - ra.lastElement % SEKTOR_SIZE)) by SEKTOR_SIZE
       }
 
-      val sektors = for (x <- mod(range._1); y <- mod(range._2)) yield s"${x}_${y}" -> "1"
+      val sektors = for (x <- mod(xRange); y <- mod(yRange)) yield (x / SEKTOR_SIZE, y / SEKTOR_SIZE)
+      queryMap(sektors)
+    }
 
-      map <<? Seq("v" -> "2", "e" -> new Date().getTime().toString) <<? sektors
-    } map { r => JsonMapper.deserialize[List[JsonMapSektor]](r.getResponseBody()) }
+    private type jSektors = List[JsonMapSektor]
 
-    def querryMap(sektors: (Int, Int)*) = execute {
+    private def now = new Date().getTime().toString
 
-      val sektorsS = sektors map (s => s"${s._1 * 20}_${s._2 * 20}" -> "1")
+    @tailrec
+    final def queryMap(sektors: Seq[(Int, Int)], already: Future[jSektors] = Future.successful(Nil)): Future[jSektors] = {
+      val (thisReq, nextReq) = sektors.splitAt(MAX_SEKTORS_REQUEST)
 
-      map <<? Seq("v" -> "2", "e" -> new Date().getTime().toString) <<? sektorsS
-    } map { r => JsonMapper.deserialize[List[JsonMapSektor]](r.getResponseBody()) }
+      val querryAtt = thisReq map (s => (s._1 * SEKTOR_SIZE) + "_" + (s._2 * SEKTOR_SIZE) -> "1")
+      val querry = map <<? Seq("v" -> "2", "e" -> now) <<? querryAtt
+      val parsed = http(querry OK as.String) map deserialize[jSektors]
+
+      val total = for (p <- parsed; a <- already) yield p ++ a
+
+      if (nextReq.isEmpty)
+        return total
+      else
+        queryMap(nextReq, total)
+    }
 
   }
 
