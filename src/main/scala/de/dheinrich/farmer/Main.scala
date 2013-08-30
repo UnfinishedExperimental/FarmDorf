@@ -22,11 +22,13 @@ import scalaz._
 import Scalaz._
 import Tag._
 import java.text.SimpleDateFormat
-import java.sql.Date
 import scala.slick.driver.HsqldbDriver
 import de.dheinrich.farmer.spatial.QuadTree
 import de.dheinrich.farmer.spatial.ArrayStorage
 import de.dheinrich.farmer.spatial.TreeStorage
+import java.util.Calendar
+import java.util.Date
+import java.sql.Timestamp
 
 object Main {
 
@@ -60,7 +62,7 @@ object Main {
     def parseVillageRow(n: Node) = {
       val idPattern(id) = (n \ "@id").text
       val otherPattern(name, x, y) = n.text
-      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = now)
+      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = new Timestamp(now.getTime))
     }
 
     //find all tags of the following form: <span id="label_text_45048">London (409|693) K64</span>
@@ -104,9 +106,9 @@ object Main {
     parseDate(time + date, "HH:mm:ssdd/MM/yyyy")
   }
 
-  def parseDate(text: String, pattern: String) = {
+  def parseDate(text: String, pattern: String): java.util.Date = {
     val format = new SimpleDateFormat(pattern)
-    new Date(format.parse(text).getTime())
+    format.parse(text)
   }
 
   def populateDB = {
@@ -118,7 +120,7 @@ object Main {
     ) yield {
       println("time to load " + (System.currentTimeMillis() - time))
 
-      val now = new Date(new java.util.Date().getTime())
+      val now = new Timestamp(new Date().getTime())
       DB.withSession {
         Query(Villages).mutate(_.delete)
         Query(Players).mutate(_.delete)
@@ -165,7 +167,8 @@ object Main {
       }
 
       val spei = gdata.village.speicher
-      VillagesResources.save(VillageResources(gdata.village.id, now, spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
+      VillagesResources.save(VillageResources(gdata.village.id, new Timestamp(now.getTime),
+        spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
     }
   }
 
@@ -243,6 +246,92 @@ object Main {
     }
 
     Await.ready(f, 1 day)
+  }
+
+  case class Movement(id: Int, from: Village, to: Village, time: Date = null)
+
+  def getOutgoingTroopsFrom(vill: Village) = {
+    val xml = getXML(_.villagePage(vill, Screens.Overview))
+    xml map parseOutgoingTroops
+  }
+
+  private val timePattern = """(\w+)(?: (.+))? um (.+) Uhr""".r
+  def parseOutgoingTroops(xml: Node @@ Overview) = {
+    val now = parseServerTime(xml)
+
+    def parseTime(xml: Node) = {
+      val timePattern(prefix, date, time) = xml.text
+
+      val parsedDate =
+        if (date == null) {
+          prefix match {
+            case "morgen" =>
+              val cal = Calendar.getInstance();
+              cal.setTime(now);
+              cal.add(Calendar.DAY_OF_YEAR, 1);
+              new Date(cal.getTimeInMillis())
+            case "heute" => now
+          }
+        } else
+          parseDate(date, "dd.MM.")
+
+      val parsedTime = parseDate(time, "HH:mm:ss:SSS")
+
+      val cal = Calendar.getInstance();
+      cal.setTime(parsedDate);
+      cal.set(Calendar.HOUR, parsedTime.getHours())
+      cal.set(Calendar.MINUTE, parsedTime.getMinutes())
+      cal.set(Calendar.SECOND, parsedTime.getSeconds())
+      cal.set(Calendar.MILLISECOND, parsedTime.getTime() % 1000)
+
+      new Date(cal.getTimeInMillis())
+    }
+
+    def parseCommand(xml: Node) = {
+      val img = (xml \ "img" \ "@src").text
+      val tmp = xml \ "span" \ "a"
+      val link = (tmp \ "@href").text
+      val text = (tmp \ "span").text
+
+      val returning = img.contains("return")
+
+      //http://de92.die-staemme.de/game.php?village=129193&id=51713545&type=own&screen=info_command
+      val linkPat = """village=(\d+)&id=(\d+)""".r
+      val mat = linkPat.findFirstMatchIn(link).get
+
+      val attacker = DB withSession {
+        val id = mat.group(1).toInt
+        Villages byID id
+      } get
+      val commandID = mat.group(2).toInt
+
+      //      Rückkehr von Barbarendorf (855|407) K48
+      val texPat = """\((\d+)\|(\d+)\)""".r
+      val mat2 = texPat.findFirstMatchIn(text).get
+      val Seq(x, y) = (1 to 2) map (i => mat2.group(i).toInt)
+
+      val defender = DB withSession {
+        Query(Villages).filter(v => v.x.is(x) && v.y.is(y)).first
+      }
+
+      val (from, to) = if (returning) (defender, attacker) else (attacker, defender)
+      Movement(commandID, from, to)
+    }
+
+    //*[@id="show_outgoing_units"]/div/table/tbody/tr[2]/td[1]
+    val results = ((xml \\ "div" filter (n => (n \ "@id").text equals "show_outgoing_units")) \ "div" \ "table" \ "tbody" \\ "tr")
+
+    if (results.isEmpty)
+      Nil
+    else
+      for (n <- results.tail) yield {
+        val childs = n \\ "td"
+
+        val command = parseCommand(childs(0))
+        val time = parseTime(childs(1))
+
+        command.copy(time = time)
+      }
   }
 
   def main(args: Array[String]): Unit = {
@@ -333,26 +422,40 @@ object Main {
 
     DB withSession {
       for (user <- Players byName user.userName) {
-        println(s"you have ${user.points} points")
-
         val ownVillages = (Villages ofPlayer user) list;
-        println(s"${user.name} has ${ownVillages.size} villages")
+        println(s"${user.name} has ${ownVillages.size} villages and ${user.points} points")
 
-        val tree = timed { () =>
-          val vills = Query(Villages).list
-          new QuadTree[TreeStorage](vills)
-        }("ini quadtree")
+        val movements = ownVillages map (v => (v, getOutgoingTroopsFrom(v)))
 
-        timed { () =>
-          timed { () =>
-            val points = ownVillages.map(v => (v.x, v.y))
-            val neighbours = tree.radiusSearch(points, 100)
-          }("search", 100)
-        }("total search", 10)
+        val f = for (v <- ownVillages) yield {
+          val m = getOutgoingTroopsFrom(v)()
+//          for (m <- getOutgoingTroopsFrom(v)) yield {
+            val inc = m flatMap(_.to.ownerID) filter(_ == user.id) size
+            val out = m.size - inc
+            s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out"
+//          }
+        }
+        f foreach println
+
+//        val ff = Future.sequence(f map (_ map println))
+//        ff()
+
+        //        val tree = timed { () =>
+        //          val vills = Query(Villages).list
+        //          new QuadTree[TreeStorage](vills)
+        //        }("ini quadtree")
+        //
+        //        timed { () =>
+        //          timed { () =>
+        //            val points = ownVillages.map(v => (v.x, v.y))
+        //            val neighbours = tree.radiusSearch(points, 100)
+        //          }("search", 100)
+        //        }("total search", 10)
       }
     }
 
   }
+
   def timed[A](f: () => A)(text: String = "Took", times: Int = 1): A = {
     val time = System.currentTimeMillis()
     var iter = 0
@@ -365,3 +468,4 @@ object Main {
     a
   }
 }
+

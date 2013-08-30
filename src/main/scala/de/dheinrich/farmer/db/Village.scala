@@ -1,13 +1,14 @@
 package de.dheinrich.farmer.db
 
-import java.sql.Date
+import java.util.Date
+import java.sql.Timestamp
 
 private object Time {
-  val old = new Date(0)
+  val old = new Timestamp(0)
 }
 
 case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
-  lastUpdate: Date = Time.old, lastUnitUp: Date = Time.old, lastBuildingsUp: Date = Time.old)
+  lastUpdate: Timestamp = Time.old, lastUnitUp: Timestamp = Time.old, lastBuildingsUp: Timestamp = Time.old)
 
 trait VillagesComponent { this: DBProfile =>
   import profile.simple._
@@ -17,9 +18,9 @@ trait VillagesComponent { this: DBProfile =>
     def ownerID = column[Option[Int]]("OWNER_ID")
     def name = column[String]("NAME")
 
-    def lastUpdate = column[Date]("LAST_UPDATE")
-    def lastUpdateUnits = column[Date]("LAST_UPDATE_UNITS")
-    def lastUpdateBuildings = column[Date]("LAST_UPDATE_BUILDINGS")
+    def lastUpdate = column[Timestamp]("LAST_UPDATE")
+    def lastUpdateUnits = column[Timestamp]("LAST_UPDATE_UNITS")
+    def lastUpdateBuildings = column[Timestamp]("LAST_UPDATE_BUILDINGS")
 
     def x = column[Int]("X")
     def y = column[Int]("Y")
@@ -34,7 +35,7 @@ trait VillagesComponent { this: DBProfile =>
     //Queries
     def byID(id: Int)(implicit session: Session) = Query(Villages).filter(_.id is id).firstOption
 
-    private def ownedVillages(pid:Int) = for (v <- Villages if v.ownerID is pid) yield v
+    private def ownedVillages(pid: Int) = for (v <- Villages if v.ownerID is pid) yield v
     def ofPlayer(player: Player) = ownedVillages(player.id)
 
     def save(v: Village)(implicit session: Session) = {
@@ -50,7 +51,16 @@ trait VillagesComponent { this: DBProfile =>
       }
     }
 
-    def unitsUpdated(vid: Int, date: Date)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateUnits) update (date)
-    def buildingsUpdated(vid: Int, date: Date)(implicit session: Session) = (for (v <- Villages if v.id is vid) yield v.lastUpdateBuildings) update (date)
+    def unitsUpdated(vid: Int, date: Date)(implicit session: Session) = {
+      val q = for (v <- Villages if v.id is vid) yield v.lastUpdateUnits
+      val stamp = new Timestamp(date.getTime)
+      q update stamp
+    }
+
+    def buildingsUpdated(vid: Int, date: Date)(implicit session: Session) = {
+      val q = for (v <- Villages if v.id is vid) yield v.lastUpdateBuildings
+      val stamp = new Timestamp(date.getTime)
+      q update stamp
+    }
   }
 }
