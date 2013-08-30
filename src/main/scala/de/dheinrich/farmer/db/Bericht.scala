@@ -1,8 +1,10 @@
 package de.dheinrich.farmer.db
 
 import java.sql.Date
+import java.sql.Timestamp
+import de.dheinrich.farmer.Units
 
-case class Bericht(id: Int, date: Date, attackerID: Int, defenderID: Int, holz: Int, lehm: Int, eisen: Int)
+case class Bericht(id: Int, date: Timestamp, attackerID: Int, defenderID: Int, holz: Int = 0, lehm: Int = 0, eisen: Int = 0, maxCapa: Int = 0)
 
 trait BerichteComponent { this: DBProfile with VillagesComponent =>
   import profile.simple._

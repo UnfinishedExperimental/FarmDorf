@@ -59,7 +59,7 @@ object Main {
   def parseVillages(p: PlayerType, now: Date, xml: Node @@ VillageOverview) = {
     val idPattern = """label_text_(\d+)""".r
     val otherPattern = """(.+) \((\d+)\|(\d+)\).*""".r
-    def parseVillageRow(n: Node) = {
+    def parseVillageRow(n: Node): Village = {
       val idPattern(id) = (n \ "@id").text
       val otherPattern(name, x, y) = n.text
       Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = new Timestamp(now.getTime))
@@ -110,7 +110,7 @@ object Main {
     val format = new SimpleDateFormat(pattern)
     format.parse(text)
   }
-
+//
   def populateDB = {
     val time = System.currentTimeMillis()
 
@@ -286,6 +286,8 @@ object Main {
 
       new Date(cal.getTimeInMillis())
     }
+    
+    for(t <- futBerichte.flatten.either.left) t.printStackTrace()
 
     def parseCommand(xml: Node) = {
       val img = (xml \ "img" \ "@src").text

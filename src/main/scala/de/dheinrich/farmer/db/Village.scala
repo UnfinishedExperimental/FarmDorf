@@ -1,14 +1,17 @@
 package de.dheinrich.farmer.db
 
+<<<<<<< HEAD
 import java.util.Date
+=======
+import scala.slick.driver.HsqldbDriver.simple._
+>>>>>>> a1b3dcb4c00f048e47529c1296f990b669accc61
 import java.sql.Timestamp
 
 private object Time {
   val old = new Timestamp(0)
 }
 
-case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
-  lastUpdate: Timestamp = Time.old, lastUnitUp: Timestamp = Time.old, lastBuildingsUp: Timestamp = Time.old)
+case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100, lastUpdate: Timestamp = Time.old, lastUnitUp: Timestamp = Time.old, lastBuildingsUp: Timestamp = Time.old)
 
 trait VillagesComponent { this: DBProfile =>
   import profile.simple._
