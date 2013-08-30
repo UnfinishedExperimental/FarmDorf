@@ -9,6 +9,7 @@ import org.xml.sax.InputSource
 import scala.xml._
 import parsing._
 import java.io.ByteArrayInputStream
+import com.ning.http.client.Response
 
 object HTML5Parser extends NoBindingFactoryAdapter {
 
@@ -27,9 +28,15 @@ object HTML5Parser extends NoBindingFactoryAdapter {
     reader.parse(source)
     rootElem
   }
-  
-  def loadXML(source : String):Node = {
+
+  def loadXML(source: String): Node = {
     val is = new ByteArrayInputStream(source.getBytes())
     loadXML(new InputSource(is))
   }
 }
+
+object HTML5 extends (Response => scala.xml.Node){
+  def apply(r:Response) = (dispatch.as.String andThen HTML5Parser.loadXML)(r)
+}
+
+

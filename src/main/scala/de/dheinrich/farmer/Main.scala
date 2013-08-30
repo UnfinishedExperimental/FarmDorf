@@ -12,8 +12,6 @@ import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.databind.JsonNode
 import json.JsonMapSektor
 import de.dheinrich.farmer.db._
-import scala.concurrent.Await
-import scala.concurrent.duration._
 import scala.concurrent.Promise
 import scala.concurrent.Future
 import de.dheinrich.farmer.json._
@@ -26,9 +24,9 @@ import scala.slick.driver.HsqldbDriver
 import de.dheinrich.farmer.spatial.QuadTree
 import de.dheinrich.farmer.spatial.ArrayStorage
 import de.dheinrich.farmer.spatial.TreeStorage
-import java.util.Calendar
-import java.util.Date
 import java.sql.Timestamp
+import scala.xml.Elem
+import com.github.nscala_time.time.Imports._
 
 object Main {
 
@@ -56,13 +54,13 @@ object Main {
 
   type PlayerType = { val id: Int; val name: String }
 
-  def parseVillages(p: PlayerType, now: Date, xml: Node @@ VillageOverview) = {
+  def parseVillages(p: PlayerType, now: DateTime, xml: Node @@ VillageOverview) = {
     val idPattern = """label_text_(\d+)""".r
     val otherPattern = """(.+) \((\d+)\|(\d+)\).*""".r
     def parseVillageRow(n: Node): Village = {
       val idPattern(id) = (n \ "@id").text
       val otherPattern(name, x, y) = n.text
-      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = new Timestamp(now.getTime))
+      Village(id.toInt, Some(p.id), name, x.toInt, y.toInt, lastUpdate = now)
     }
 
     //find all tags of the following form: <span id="label_text_45048">London (409|693) K64</span>
@@ -85,11 +83,11 @@ object Main {
     }
   }
 
-  def getXML[A](request: DieStaemme.Session => Future[Response] @@ A): Future[Node @@ A] = {
+  def getXML[A](request: DieStaemme.Session => Future[Node] @@ A): Future[Node @@ A] = {
     for (
       s <- sessFuture;
-      r <- request(s)
-    ) yield Tag(HTML5Parser.loadXML(r.getResponseBody()))
+      xml <- request(s)
+    ) yield Tag(xml)
   }
 
   def listImages = {
@@ -100,17 +98,15 @@ object Main {
   }
 
   def parseServerTime(xml: Node) = {
-    val time = xml \\ "span" filter (n => (n \ "@id").text equals "serverTime") text
-    val date = xml \\ "span" filter (n => (n \ "@id").text equals "serverDate") text
+    val time = xml \\ "span" filter (n => (n \ "@id").text equals "serverTime")
+    val date = xml \\ "span" filter (n => (n \ "@id").text equals "serverDate")
 
-    parseDate(time + date, "HH:mm:ssdd/MM/yyyy")
+    if (time.isEmpty || date.isEmpty)
+      Left()
+    else
+      Right(DateTimeFormat.forPattern("HH:mm:ssdd/MM/yyyy").parseDateTime(time.text + date.text))
   }
-
-  def parseDate(text: String, pattern: String): java.util.Date = {
-    val format = new SimpleDateFormat(pattern)
-    format.parse(text)
-  }
-//
+  //
   def populateDB = {
     val time = System.currentTimeMillis()
 
@@ -120,7 +116,7 @@ object Main {
     ) yield {
       println("time to load " + (System.currentTimeMillis() - time))
 
-      val now = new Timestamp(new Date().getTime())
+      val now = DateTime.now
       DB.withSession {
         Query(Villages).mutate(_.delete)
         Query(Players).mutate(_.delete)
@@ -148,7 +144,7 @@ object Main {
     }
 
     println("waiting...")
-    Await.ready(f, 1 day)
+    f()
     println("finished")
     DB.withSession {
       def printSize(t: Table[_]) = println(Query(t).list.size)
@@ -158,7 +154,7 @@ object Main {
     }
   }
 
-  def saveGameDate(gdata: JsonGameData, now: Date) = {
+  def saveGameDate(gdata: JsonGameData, now: DateTime) = {
     println(s"saving buildings & speicher for village: ${gdata.village.name}")
     DB.withSession {
       for (b <- gdata.village.gebaeude) {
@@ -167,7 +163,7 @@ object Main {
       }
 
       val spei = gdata.village.speicher
-      VillagesResources.save(VillageResources(gdata.village.id, new Timestamp(now.getTime),
+      VillagesResources.save(VillageResources(gdata.village.id, now,
         spei.holz.amount, spei.lehm.amount, spei.eisen.amount))
     }
   }
@@ -177,7 +173,9 @@ object Main {
       val now = parseServerTime(xml2)
       val units = parseUnitCounts(vill, xml2) map { u => VillageUnit(vill.id, u._1, u._2._2) }
       println(s"saving units for village: ${vill.name}")
-      VillageUnits.save(now, units: _*)
+
+      for (n <- now.right) VillageUnits.save(n, units: _*)
+      for (_ <- now.left) println("error parsing servertime while saving village units")
     }
   })
 
@@ -189,7 +187,7 @@ object Main {
 
     def parseReportID(xml: Node) = {
       val tds = xml \\ "td"
-      val date = parseDate(tds(1).text, "dd.MM.yy HH:mm")
+      val date = DateTimeFormat.forPattern("dd.MM.yy HH:mm").parseDateTime(tds(1).text)
       val id = (tds(0) \ "input" \ "@name").text.substring(3)
 
       (id.toInt, date)
@@ -234,21 +232,21 @@ object Main {
 
     val f = for (xml <- futXml) yield {
       val gdata = parseGameData(xml)
-      val now = parseServerTime(xml)
-
-      println(gdata)
-      saveGameDate(gdata, now)
-      saveVillageUnits(parseVillages(gdata.player, now, xml))
+      for (now <- parseServerTime(xml).right) {
+        println(gdata)
+        saveGameDate(gdata, now)
+        saveVillageUnits(parseVillages(gdata.player, now, xml))
+      }
     }
 
     f onFailure {
       case e: Exception => e.printStackTrace()
     }
 
-    Await.ready(f, 1 day)
+    f()
   }
 
-  case class Movement(id: Int, from: Village, to: Village, time: Date = null)
+  case class Movement(id: Int, from: Village, to: Village, time: DateTime = null)
 
   def getOutgoingTroopsFrom(vill: Village) = {
     val xml = getXML(_.villagePage(vill, Screens.Overview))
@@ -257,7 +255,8 @@ object Main {
 
   private val timePattern = """(\w+)(?: (.+))? um (.+) Uhr""".r
   def parseOutgoingTroops(xml: Node @@ Overview) = {
-    val now = parseServerTime(xml)
+
+    val now = parseServerTime(xml).right.get
 
     def parseTime(xml: Node) = {
       val timePattern(prefix, date, time) = xml.text
@@ -265,29 +264,16 @@ object Main {
       val parsedDate =
         if (date == null) {
           prefix match {
-            case "morgen" =>
-              val cal = Calendar.getInstance();
-              cal.setTime(now);
-              cal.add(Calendar.DAY_OF_YEAR, 1);
-              new Date(cal.getTimeInMillis())
+            case "morgen" => now + (1 day)
             case "heute" => now
           }
         } else
-          parseDate(date, "dd.MM.")
+          DateTimeFormat.forPattern("dd.MM.").parseDateTime(date)
 
-      val parsedTime = parseDate(time, "HH:mm:ss:SSS")
+      val parsedTime = DateTimeFormat.forPattern("HH:mm:ss:SSS").parseDateTime(time)
 
-      val cal = Calendar.getInstance();
-      cal.setTime(parsedDate);
-      cal.set(Calendar.HOUR, parsedTime.getHours())
-      cal.set(Calendar.MINUTE, parsedTime.getMinutes())
-      cal.set(Calendar.SECOND, parsedTime.getSeconds())
-      cal.set(Calendar.MILLISECOND, parsedTime.getTime() % 1000)
-
-      new Date(cal.getTimeInMillis())
+      parsedDate.millisOfDay().setCopy(0) + parsedTime.millis
     }
-    
-    for(t <- futBerichte.flatten.either.left) t.printStackTrace()
 
     def parseCommand(xml: Node) = {
       val img = (xml \ "img" \ "@src").text
@@ -430,17 +416,16 @@ object Main {
         val movements = ownVillages map (v => (v, getOutgoingTroopsFrom(v)))
 
         val f = for (v <- ownVillages) yield {
-          val m = getOutgoingTroopsFrom(v)()
-//          for (m <- getOutgoingTroopsFrom(v)) yield {
-            val inc = m flatMap(_.to.ownerID) filter(_ == user.id) size
+          //          val m = getOutgoingTroopsFrom(v)()
+          for (m <- getOutgoingTroopsFrom(v)) yield {
+            val inc = m flatMap (_.to.ownerID) filter (_ == user.id) size
             val out = m.size - inc
             s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out"
-//          }
+          }
         }
-        f foreach println
 
-//        val ff = Future.sequence(f map (_ map println))
-//        ff()
+        val ff = Future.sequence(f map (_ map println))
+        ff()
 
         //        val tree = timed { () =>
         //          val vills = Query(Villages).list
@@ -455,7 +440,6 @@ object Main {
         //        }("total search", 10)
       }
     }
-
   }
 
   def timed[A](f: () => A)(text: String = "Took", times: Int = 1): A = {

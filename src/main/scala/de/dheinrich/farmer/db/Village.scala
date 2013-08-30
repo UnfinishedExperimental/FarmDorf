@@ -1,29 +1,28 @@
 package de.dheinrich.farmer.db
 
-<<<<<<< HEAD
-import java.util.Date
-=======
-import scala.slick.driver.HsqldbDriver.simple._
->>>>>>> a1b3dcb4c00f048e47529c1296f990b669accc61
 import java.sql.Timestamp
+import org.joda.time.DateTime
 
-private object Time {
-  val old = new Timestamp(0)
-}
-
-case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100, lastUpdate: Timestamp = Time.old, lastUnitUp: Timestamp = Time.old, lastBuildingsUp: Timestamp = Time.old)
+case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, points: Int = 0, mood: Int = 100,
+  lastUpdate: DateTime = new DateTime(0), lastUnitUp: DateTime = new DateTime(0), lastBuildingsUp: DateTime = new DateTime(0))
 
 trait VillagesComponent { this: DBProfile =>
   import profile.simple._
 
+  implicit val boolTypeMapper = MappedTypeMapper.base[DateTime, Timestamp](
+    { dt => new Timestamp(dt.getMillis()) }, 
+    { ts => new DateTime(ts.getTime()) } 
+    )
+
   object Villages extends Table[Village]("VILLAGES") {
+
     def id = column[Int]("ID", O.PrimaryKey)
     def ownerID = column[Option[Int]]("OWNER_ID")
     def name = column[String]("NAME")
 
-    def lastUpdate = column[Timestamp]("LAST_UPDATE")
-    def lastUpdateUnits = column[Timestamp]("LAST_UPDATE_UNITS")
-    def lastUpdateBuildings = column[Timestamp]("LAST_UPDATE_BUILDINGS")
+    def lastUpdate = column[DateTime]("LAST_UPDATE")
+    def lastUpdateUnits = column[DateTime]("LAST_UPDATE_UNITS")
+    def lastUpdateBuildings = column[DateTime]("LAST_UPDATE_BUILDINGS")
 
     def x = column[Int]("X")
     def y = column[Int]("Y")
@@ -54,16 +53,14 @@ trait VillagesComponent { this: DBProfile =>
       }
     }
 
-    def unitsUpdated(vid: Int, date: Date)(implicit session: Session) = {
+    def unitsUpdated(vid: Int, date: DateTime)(implicit session: Session) = {
       val q = for (v <- Villages if v.id is vid) yield v.lastUpdateUnits
-      val stamp = new Timestamp(date.getTime)
-      q update stamp
+      q update date
     }
 
-    def buildingsUpdated(vid: Int, date: Date)(implicit session: Session) = {
+    def buildingsUpdated(vid: Int, date: DateTime)(implicit session: Session) = {
       val q = for (v <- Villages if v.id is vid) yield v.lastUpdateBuildings
-      val stamp = new Timestamp(date.getTime)
-      q update stamp
+      q update date
     }
   }
 }

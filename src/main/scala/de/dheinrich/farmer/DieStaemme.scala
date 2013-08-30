@@ -24,6 +24,10 @@ import de.dheinrich.farmer.Report
 import scala.concurrent._
 import java.net.URL
 import scala.annotation.tailrec
+import dispatch.OkFunctionHandler
+import com.ning.http.client.Request
+import scala.xml.Elem
+import scala.xml.Node
 
 object DieStaemme {
   private val http = dispatch.Http.configure(_ setFollowRedirects true)
@@ -115,9 +119,9 @@ object DieStaemme {
     private def game = serverMain / "game.php"
     private def map = serverMain / "map.php"
 
-    private def execute(requ: RequestBuilder) = {
+    private def execute[T](requ: RequestBuilder, trans: Response => T = identity[Response] _) = {
       cookies foreach requ.addCookie _
-      http(requ)
+      http(requ OK trans)
     }
 
     def logout = execute(game <<? action("logout"))
@@ -125,21 +129,21 @@ object DieStaemme {
     private def screenR(screen: Screens.Value) = game <<? ("screen" -> screen.toString)
     private def vilScreen(screen: Screens.Value, id: Int) = screenR(screen) <<? "village" -> id.toString
 
-    def screenRequest[A](screen: Screens.Value @@ A): Future[Response] @@ A = Tag(execute(screenR(screen)))
+    def screenRequest[A](screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(screenR(screen), HTML5))
 
     private val pageItemCount = 12
-    def reportOverview(page: Int): Future[Response] @@ ReportOverview = {
+    def reportOverview(page: Int): Future[Node] @@ ReportOverview = {
       val from = page * pageItemCount
       val req = game <<? Seq("screen" -> Screens.Report.toString, "mode" -> "attack", "from" -> from.toString)
-      Tag(execute(req))
+      Tag(execute(req, HTML5))
     }
 
-    def reportRequest(id: Int): Future[Response] @@ Report = {
+    def reportRequest(id: Int): Future[Node] @@ Report = {
       val req = game <<? Seq("screen" -> Screens.Report.toString, "view" -> id.toString)
-      Tag(execute(req))
+      Tag(execute(req, HTML5))
     }
 
-    def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Response] @@ A = Tag(execute(vilScreen(screen, v.id)))
+    def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(vilScreen(screen, v.id), HTML5))
 
     //map stuff
     val SEKTOR_SIZE = 20
