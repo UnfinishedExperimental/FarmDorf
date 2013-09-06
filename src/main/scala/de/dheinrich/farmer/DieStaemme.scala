@@ -145,6 +145,45 @@ object DieStaemme {
 
     def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(vilScreen(screen, v.id), HTML5))
 
+    case class Attack(private val request: RequestBuilder) {
+      def confirm(): Future[Unit] = { execute(request) map { r => () } } //vllcht sollte überprüft werden ob der angriff wirklich ausgeführt wurde
+    }
+
+    def prepareAttack(from: Village, target: Village, units: Map[Units.Value, Int]) = {
+      val request = vilScreen(Screens.Place, from.id) <<? "target" -> target.id.toString
+      val attackForm = execute(request, HTML5)
+
+      val futConfirm = attackForm flatMap { formXML =>
+        val uniqueID = (formXML \\ "form" filter (n => (n \ "@id").text equals "units_form")) \ "input"
+        val idName = uniqueID \ "@name" text
+        val idValue = uniqueID \ "@value" text
+
+        val para = Seq(idName -> idValue, "attack" -> "Angreifen", "x" -> target.x.toString, "y" -> target.y.toString)
+        val unitPara = for ((unit, count) <- units) yield (unit.toString, count.toString)
+
+        val request = vilScreen(Screens.Place, from.id) <<? "try" -> "confirm" << unitPara << para
+        execute(request, HTML5)
+      }
+
+      for (confirm <- futConfirm) yield {
+        val form = confirm \\ "form"
+
+        val action = form \ "@action" text
+        val pattern = """h=(\w+)&""".r
+        val h = pattern.findFirstMatchIn(action).get.group(1)
+
+        val inputs = (form \\ "input" filter (n => (n \ "@type").text equals "hidden"))
+        val para = for (in <- inputs) yield {
+          val name = in \ "@name" text;
+          val value = in \ "@value" text;
+          (name, value)
+        }
+
+        val request = vilScreen(Screens.Place, from.id) <<? Seq("action" -> "command", "h" -> h) << para
+        Attack(request)
+      }
+    }
+
     //map stuff
     val SEKTOR_SIZE = 20
     val MAX_SEKTORS_REQUEST = 100

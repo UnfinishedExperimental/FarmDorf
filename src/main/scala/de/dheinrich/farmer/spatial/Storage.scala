@@ -2,6 +2,8 @@ package de.dheinrich.farmer.spatial
 
 import scala.collection.immutable.TreeMap
 import de.dheinrich.farmer.db.Village
+import scala.annotation.tailrec
+import scala.collection.LinearSeq
 
 trait Builder[A <: Storage] {
   def buildFrom(vills: Traversable[(Int, Village)]): A
@@ -33,36 +35,54 @@ object Storage {
 }
 
 trait Storage {
-  def getRange(range: (Int, Int)): Traversable[Village]
-  def collectNodes(nodes: Traversable[Node]): Traversable[Village]
+  def getRange(range: Range): Traversable[Village]
+  def collectNodes(nodes: Traversable[Node]): Seq[Village]
+  def traverseNodes(nodes: Traversable[Node]): Traversable[Village]
 }
 
 class TreeStorage(map: TreeMap[Int, Village]) extends Storage {
-  def getRange(range: (Int, Int)) = {
-    map.range(range._1, range._2 + 1).values
+  def getRange(range: Range) = {
+    map.range(range.start, range.last + 1).values
   }
 
-  def collectNodes(nodes: Traversable[Node]): Traversable[Village] = {
+  def collectNodes(nodes: Traversable[Node]): Seq[Village] = {
     val buffer = IndexedSeq.newBuilder[Village]
-    buffer.sizeHint(10000)
+    buffer.sizeHint(2048)
 
-    for (n <- nodes) {
-      buffer ++= getRange(n.range)
+    val ranges = merge(nodes.map(_.range).toList)
+    for (n <- ranges) {
+      buffer ++= getRange(n)
     }
 
     buffer.result
   }
+
+  def traverseNodes(nodes: Traversable[Node]): Traversable[Village] = {
+    nodes.view flatMap { n =>
+      val r = n.range
+      map.range(r.start, r.last + 1).valuesIterator
+    }
+  }
+
+  @tailrec
+  private def collapse(rs: List[Range], sep: List[Range] = Nil): List[Range] = rs match {
+    case x :: y :: rest =>
+      //    case x :: y :: rest =>
+      if (y.start > x.last + 1) collapse(y :: rest, x :: sep)
+      else collapse((x.start to (x.last max y.last)) :: rest, sep)
+    case _ =>
+      rs ::: sep
+  }
+
+  def merge(rs: List[Range]) = collapse(rs.sortBy(_.start))
 }
 
 class ArrayStorage(data: Array[Village]) extends Storage {
-  def getRange(range: (Int, Int)) = {
-    var iter = range._1
-
+  def getRange(range: Range) = {
     val buffer = IndexedSeq.newBuilder[Village]
-    buffer.sizeHint(10000)
+    buffer.sizeHint(2048)
 
-    while (iter <= range._2) {
-      iter = iter + 1
+    for (iter <- range) {
       val v = data(iter)
       if (v != null)
         buffer += v
@@ -71,14 +91,14 @@ class ArrayStorage(data: Array[Village]) extends Storage {
     buffer.result
   }
 
-  def collectNodes(nodes: Traversable[Node]): Traversable[Village] = {
+  def collectNodes(nodes: Traversable[Node]): Seq[Village] = {
     val buffer = IndexedSeq.newBuilder[Village]
-    buffer.sizeHint(10000)
+    buffer.sizeHint(2048)
 
     for (n <- nodes) {
-      val (start, end) = n.range
-      var iter = start
-      while (iter <= end) {
+      val r = n.range
+      var iter = r.start
+      while (iter <= r.last) {
         iter = iter + 1
         val v = data(iter)
         if (v != null)
@@ -87,5 +107,14 @@ class ArrayStorage(data: Array[Village]) extends Storage {
     }
 
     buffer.result
+  }
+
+  def traverseNodes(nodes: Traversable[Node]): Traversable[Village] = {
+    (for (
+      n <- nodes.view;
+      i <- n.range
+    ) yield {
+      data(i)
+    }) filter (_ != null)
   }
 }

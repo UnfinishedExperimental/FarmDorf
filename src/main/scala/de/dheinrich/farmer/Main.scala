@@ -27,6 +27,7 @@ import de.dheinrich.farmer.spatial.TreeStorage
 import java.sql.Timestamp
 import scala.xml.Elem
 import com.github.nscala_time.time.Imports._
+import shapeless._
 
 object Main {
 
@@ -246,7 +247,15 @@ object Main {
     f()
   }
 
-  case class Movement(id: Int, from: Village, to: Village, time: DateTime = null)
+  sealed trait MovementType
+  object Attack extends MovementType
+  object Return extends MovementType
+  object Cancel extends MovementType
+  object Support extends MovementType
+  object OrderedBack extends MovementType
+  object SendBack extends MovementType
+
+  case class Movement(id: Int, from: Village, to: Village, moveType: MovementType, time: DateTime = null)
 
   def getOutgoingTroopsFrom(vill: Village) = {
     val xml = getXML(_.villagePage(vill, Screens.Overview))
@@ -281,13 +290,21 @@ object Main {
       val link = (tmp \ "@href").text
       val text = (tmp \ "span").text
 
-      val returning = img.contains("return")
+      val imgPat = """/.*\.png""".r
+      val mType = imgPat.findFirstIn(img).get match {
+        case "return" => Return
+        case "attack" => Attack
+        case "cancel" => Cancel
+        case "support" => Support
+        case "back" => OrderedBack
+        case "other_back" => SendBack
+      }
 
       //http://de92.die-staemme.de/game.php?village=129193&id=51713545&type=own&screen=info_command
       val linkPat = """village=(\d+)&id=(\d+)""".r
       val mat = linkPat.findFirstMatchIn(link).get
 
-      val attacker = DB withSession {
+      val startVillage = DB withSession {
         val id = mat.group(1).toInt
         Villages byID id
       } get
@@ -298,12 +315,13 @@ object Main {
       val mat2 = texPat.findFirstMatchIn(text).get
       val Seq(x, y) = (1 to 2) map (i => mat2.group(i).toInt)
 
-      val defender = DB withSession {
+      val destinie = DB withSession {
         Query(Villages).filter(v => v.x.is(x) && v.y.is(y)).first
       }
 
-      val (from, to) = if (returning) (defender, attacker) else (attacker, defender)
-      Movement(commandID, from, to)
+      val returning = Seq(Return, Cancel, OrderedBack, SendBack) contains mType
+      val (from, to) = if (returning) (destinie, startVillage) else (startVillage, destinie)
+      Movement(commandID, from, to, mType)
     }
 
     //*[@id="show_outgoing_units"]/div/table/tbody/tr[2]/td[1]
@@ -413,31 +431,87 @@ object Main {
         val ownVillages = (Villages ofPlayer user) list;
         println(s"${user.name} has ${ownVillages.size} villages and ${user.points} points")
 
-        val movements = ownVillages map (v => (v, getOutgoingTroopsFrom(v)))
+        val barbar = Query(Villages).filter(_.ownerID isNull).list
+        val tree = new QuadTree[TreeStorage](barbar)
 
-        val f = for (v <- ownVillages) yield {
-          //          val m = getOutgoingTroopsFrom(v)()
-          for (m <- getOutgoingTroopsFrom(v)) yield {
-            val inc = m flatMap (_.to.ownerID) filter (_ == user.id) size
-            val out = m.size - inc
-            s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out"
-          }
-        }
-
-        val ff = Future.sequence(f map (_ map println))
-        ff()
-
-        //        val tree = timed { () =>
-        //          val vills = Query(Villages).list
-        //          new QuadTree[TreeStorage](vills)
-        //        }("ini quadtree")
+        println(s"there are ${barbar.size} Barbar villages!")
+        //        ownVillages
         //
-        //        timed { () =>
-        //          timed { () =>
-        //            val points = ownVillages.map(v => (v.x, v.y))
-        //            val neighbours = tree.radiusSearch(points, 100)
-        //          }("search", 100)
-        //        }("total search", 10)
+        val first = ownVillages.head
+        println(first)
+
+        var l: List[Village] = Nil
+        var l2: List[Village] = Nil
+
+        val take = 10
+        
+        timed { () =>
+          val stream = tree.nearestStream(first.x, first.y)
+          l = stream.take(take).toList
+        }("nearest search", 10)
+
+        timed { () =>
+          l2 = barbar.sortBy { b =>
+            val w = first.x - b.x
+            val h = first.y - b.y
+
+            w * w + h * h
+          } take take
+        }("all just sort", 10)
+        
+        println(l2 equals l)
+        val coord = (v:Village) => (v.x, v.y)
+        l map coord foreach println
+        println("----")
+        l2 map coord foreach println
+
+        //        val target = Query(Villages).filter(v => (v.x === 858) && (v.y === 409)).first
+        //
+        //        for (session <- sessFuture) {
+        //          val fut = session.prepareAttack(first, target, Map(Units.SPEER -> 10))
+        //
+        //          fut onSuccess {
+        //            case attack =>
+        //              println(s"attacking from ${first.name} village: ${target.name}")
+        //              attack.confirm()
+        //          }
+        //          
+        //          fut onFailure {
+        //            case t:Throwable => t.printStackTrace
+        //            case a => println(a)
+        //          }
+        //        }
+        //
+        //        Thread.sleep(1000000)
+        println("end")
+
+        //
+        //        val movements = ownVillages map (v => (v, getOutgoingTroopsFrom(v)))
+        //
+        //        val f = for (v <- ownVillages) yield {
+        //          //          val m = getOutgoingTroopsFrom(v)()
+        //          for (m <- getOutgoingTroopsFrom(v)) yield {
+        //            val inc = m flatMap (_.to.ownerID) filter (_ == user.id) size
+        //            val out = m.size - inc
+        //            s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out"
+        //          }
+        //        }
+        //
+        //        val ff = Future.sequence(f map (_ map println))
+        //        ff()       
+        //        
+        //
+        //        //        val tree = timed { () =>
+        //        //          val vills = Query(Villages).list
+        //        //          new QuadTree[TreeStorage](vills)
+        //        //        }("ini quadtree")
+        //        //
+        //        //        timed { () =>
+        //        //          timed { () =>
+        //        //            val points = ownVillages.map(v => (v.x, v.y))
+        //        //            val neighbours = tree.radiusSearch(points, 100)
+        //        //          }("search", 100)
+        //        //        }("total search", 10)
       }
     }
   }

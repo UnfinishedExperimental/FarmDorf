@@ -13,7 +13,7 @@
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<javafx.version>2.2.4</javafx.version>
-		<scala.version>2.10.0</scala.version>
+		<scala.version>2.10.2</scala.version>
 	</properties>
 
 	<dependencies>
@@ -66,6 +66,11 @@
 			<groupId>com.github.nscala-time</groupId>
 			<artifactId>nscala-time_2.10</artifactId>
 			<version>0.6.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.chuusai</groupId>
+			<artifactId>shapeless_2.10</artifactId>
+			<version>1.2.5-SNAPSHOT</version>
 		</dependency>
 	</dependencies>
 
@@ -149,4 +154,15 @@
 
 		</plugins>
 	</build>
+
+	<repositories>
+		<repository>
+			<id>sonatype-nexus-snapshots</id>
+			<name>Sonatype Nexus Snapshots</name>
+			<url>https://oss.sonatype.org/content/repositories/snapshots</url>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+	</repositories>
 </project>
