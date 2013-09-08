@@ -15,6 +15,7 @@ import de.dheinrich.farmer.db._
 import scala.concurrent.Promise
 import scala.concurrent.Future
 import de.dheinrich.farmer.json._
+import de.dheinrich.farmer.{ DieStaemme => ds }
 import java.io.File
 import scalaz._
 import Scalaz._
@@ -28,6 +29,7 @@ import java.sql.Timestamp
 import scala.xml.Elem
 import com.github.nscala_time.time.Imports._
 import shapeless._
+import scala.annotation.tailrec
 
 object Main {
 
@@ -76,12 +78,25 @@ object Main {
     val unitPatter = """(\d+)/(\d+)""".r
 
     val unitRows = xml \\ "tr" filter (n => (n \ "@class").text startsWith "row")
-    for (row <- unitRows) yield {
+
+    (for (row <- unitRows) yield {
       val columns = row \\ "td"
-      val typePatter(unitType) = (columns(0) \ "a" \ "@onclick").text
-      val unitPatter(there, total) = columns(columns.size - 2).text
-      Units.withName(unitType) -> (there.toInt, total.toInt)
-    }
+      if (columns.size >= 3) {
+        val typeText = (columns(0) \ "a" \ "@onclick").text
+        val amountText = columns(columns.size - 2).text
+
+        for (
+          tm <- typePatter.findFirstMatchIn(typeText);
+          um <- unitPatter.findFirstMatchIn(amountText)
+        ) yield {
+          val unitType = tm.group(1)
+          val Seq(there, total) = (1 to 2) map { um.group(_).toInt }
+
+          Units.withName(unitType) -> (there, total)
+        }
+      } else
+        None
+    }).flatten
   }
 
   def getXML[A](request: DieStaemme.Session => Future[Node] @@ A): Future[Node @@ A] = {
@@ -99,13 +114,16 @@ object Main {
   }
 
   def parseServerTime(xml: Node) = {
-    val time = xml \\ "span" filter (n => (n \ "@id").text equals "serverTime")
-    val date = xml \\ "span" filter (n => (n \ "@id").text equals "serverDate")
+    val time = (xml \\ "span" filter (n => (n \ "@id").text equals "serverTime") text) trim
+    val date = (xml \\ "span" filter (n => (n \ "@id").text equals "serverDate") text) trim
 
-    if (time.isEmpty || date.isEmpty)
+    if (time.isEmpty || date.isEmpty) {
+      //println(xml)
       Left()
-    else
-      Right(DateTimeFormat.forPattern("HH:mm:ssdd/MM/yyyy").parseDateTime(time.text + date.text))
+    } else {
+
+      Right(DateTimeFormat.forPattern("HH:mm:ss dd/MM/yyyy").parseDateTime(time.take(8) + " " + date.take(10)))
+    }
   }
   //
   def populateDB = {
@@ -172,19 +190,22 @@ object Main {
   def saveVillageUnits(villages: Iterable[Village]) = Future.sequence(villages map { vill =>
     for (xml2 <- getXML(_.villagePage(vill, Screens.Train))) yield {
       val now = parseServerTime(xml2)
-      val units = parseUnitCounts(vill, xml2) map { u => VillageUnit(vill.id, u._1, u._2._2) }
+      val parsed = parseUnitCounts(vill, xml2)
+      val units = parsed map { u => VillageUnit(vill.id, u._1, u._2._2) }
       println(s"saving units for village: ${vill.name}")
 
-      for (n <- now.right) VillageUnits.save(n, units: _*)
+      for (n <- now.right) DB withSession { VillageUnits.save(n, units: _*) }
       for (_ <- now.left) println("error parsing servertime while saving village units")
+      (vill, parsed.toMap)
     }
   })
 
   def parseReportPageCount(xml: Node @@ ReportOverview) = (xml \\ "a" filter (n => (n \ "@class").text equals ("paged-nav-item"))).size + 1
 
   def parseReportIDsFromPage(xml: Node @@ ReportOverview) = {
-    val table = xml \\ "table" filter (n => (n \ "@id").text equals "report_list") head
-    val reports = (table \ "tbody" \\ "tr").tail.dropRight(1)
+    val table = (xml \\ "table" filter (n => (n \ "@id").text equals "report_list")) head
+
+    val reports = (table \\ "tr").tail.dropRight(1)
 
     def parseReportID(xml: Node) = {
       val tds = xml \\ "td"
@@ -198,32 +219,54 @@ object Main {
 
   def parseReportVillages(xml: Node @@ Report) = {
     val vills = xml \\ "span" \\ "@data-id" map (_.text.toInt)
-    if (vills.isEmpty)
-      println("---------\n---------\n---------\n---------\n---------\n" + xml)
+    //    if (vills.isEmpty)
+    //      println("---------\n---------\n---------\n---------\n---------\n" + xml)
     val Seq(attacker, defender) = vills
     (attacker, defender)
   }
 
-  private val resPattern = """ ([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)/([\d\.]+)""".r
+  private val resPattern = """([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)""".r
+  private val capPattern = """([\d\.]+)/([\d\.]+)""".r
+
   def parseReportResources(xml: Node @@ Report) = {
     def parse(s: String) = s.filter(_ != '.').toInt
 
-    val results = (xml \\ "table" filter (n => (n \ "@id").text equals "attack_results"))
-    if (results.isEmpty) {
-      (0, 0, 0)
-    } else {
-      val res = results \ "tbody" \ "tr" \ "td" text
+    val results = ((xml \\ "table" filter (n => (n \ "@id").text equals "attack_results")) \\ "td")
 
-      resPattern.findFirstMatchIn(res) match {
+    if (results.isEmpty)
+      (0, 0, 0, 0)
+    else {
+      val res = results(0).text
+      val r = resPattern.findFirstMatchIn(res) match {
         case Some(m) =>
-
-          //val Seq(holz, lehm, eisen, took, could) = for (i <- 1 to m.groupCount) yield m.group(i)
           val holz = m.group(1)
           val lehm = m.group(2)
           val eisen = m.group(3)
           (parse(holz), parse(lehm), parse(eisen))
 
         case None => (0, 0, 0)
+      }
+
+      val cap = results(1).text
+      val c = capPattern.findFirstMatchIn(cap) map { m => parse(m.group(2)) } getOrElse 0
+
+      (r._1, r._2, r._3, c)
+    }
+  }
+
+  def parseReportSpyResources(xml: Node @@ Report) = {
+    def parse(s: String) = s.filter(_ != '.').toInt
+
+    val results = ((xml \\ "table" filter (n => (n \ "@id").text equals "attack_spy")) \\ "td")
+    if (results.isEmpty)
+      None
+    else {
+      val res = results.head.text
+      resPattern.findFirstMatchIn(res) map { m =>
+        val holz = m.group(1)
+        val lehm = m.group(2)
+        val eisen = m.group(3)
+        (parse(holz), parse(lehm), parse(eisen))
       }
     }
   }
@@ -234,7 +277,7 @@ object Main {
     val f = for (xml <- futXml) yield {
       val gdata = parseGameData(xml)
       for (now <- parseServerTime(xml).right) {
-        println(gdata)
+        //println(gdata)
         saveGameDate(gdata, now)
         saveVillageUnits(parseVillages(gdata.player, now, xml))
       }
@@ -255,16 +298,16 @@ object Main {
   object OrderedBack extends MovementType
   object SendBack extends MovementType
 
+  case class VillageMovements(in: Seq[Movement], out: Seq[Movement])
   case class Movement(id: Int, from: Village, to: Village, moveType: MovementType, time: DateTime = null)
 
-  def getOutgoingTroopsFrom(vill: Village) = {
+  def getTroopMovmentsFrom(vill: Village) = {
     val xml = getXML(_.villagePage(vill, Screens.Overview))
-    xml map parseOutgoingTroops
+    xml map parseTroops
   }
 
   private val timePattern = """(\w+)(?: (.+))? um (.+) Uhr""".r
-  def parseOutgoingTroops(xml: Node @@ Overview) = {
-
+  def parseTroops(xml: Node @@ Overview) = {
     val now = parseServerTime(xml).right.get
 
     def parseTime(xml: Node) = {
@@ -284,14 +327,14 @@ object Main {
       parsedDate.millisOfDay().setCopy(0) + parsedTime.millis
     }
 
-    def parseCommand(xml: Node) = {
+    def parseCommand(xml: Node, isIncoming: Boolean) = {
       val img = (xml \ "img" \ "@src").text
       val tmp = xml \ "span" \ "a"
       val link = (tmp \ "@href").text
       val text = (tmp \ "span").text
 
-      val imgPat = """/.*\.png""".r
-      val mType = imgPat.findFirstIn(img).get match {
+      val imgPat = """/(\w+)\.png""".r
+      val mType = imgPat.findFirstMatchIn(img).get.group(1) match {
         case "return" => Return
         case "attack" => Attack
         case "cancel" => Cancel
@@ -311,92 +354,230 @@ object Main {
       val commandID = mat.group(2).toInt
 
       //      Rückkehr von Barbarendorf (855|407) K48
-      val texPat = """\((\d+)\|(\d+)\)""".r
-      val mat2 = texPat.findFirstMatchIn(text).get
-      val Seq(x, y) = (1 to 2) map (i => mat2.group(i).toInt)
+      val destinie = if (isIncoming) {
+        DB withSession {
+          Query(Villages).filter(_.name is text).first
+        }
+      } else {
+        val texPat = """\((\d+)\|(\d+)\)""".r
+        val mat2 = texPat.findFirstMatchIn(text).get
+        val Seq(x, y) = (1 to 2) map (i => mat2.group(i).toInt)
 
-      val destinie = DB withSession {
-        Query(Villages).filter(v => v.x.is(x) && v.y.is(y)).first
+        DB withSession {
+          Query(Villages).filter(v => v.x.is(x) && v.y.is(y)).first
+        }
       }
 
       val returning = Seq(Return, Cancel, OrderedBack, SendBack) contains mType
       val (from, to) = if (returning) (destinie, startVillage) else (startVillage, destinie)
       Movement(commandID, from, to, mType)
     }
+    //*[@id="show_incoming_units"]/div/form/table/tbody/tr[2]
+    //*[@id="show_outgoing_units"]/div/table/tbody/tr[2]/
+    def parseFromId(isIncoming: Boolean) = {
+      val divID = if (isIncoming) "show_incoming_units" else "show_outgoing_units"
 
-    //*[@id="show_outgoing_units"]/div/table/tbody/tr[2]/td[1]
-    val results = ((xml \\ "div" filter (n => (n \ "@id").text equals "show_outgoing_units")) \ "div" \ "table" \ "tbody" \\ "tr")
+      val prepre = (xml \\ "div" filter (n => (n \ "@id").text equals divID))
+      val preResults = prepre \\ "div"
+      val weiter = if (isIncoming) preResults \\ "form" else preResults
+      val results = weiter \\ "table" \\ "tr"
 
-    if (results.isEmpty)
-      Nil
-    else
-      for (n <- results.tail) yield {
-        val childs = n \\ "td"
+      if (results.isEmpty) {
+        Nil
+      } else
+        (for (n <- results.tail) yield {
+          val childs = n \\ "td"
+          if (childs.size > 2) {
+            val command = parseCommand(childs(0), isIncoming)
+            val time = parseTime(childs(1))
 
-        val command = parseCommand(childs(0))
-        val time = parseTime(childs(1))
+            Some(command.copy(time = time))
+          } else None
+        }).flatten
+    }
+    val out = parseFromId(false)
+    val in = parseFromId(true) map { m =>
+      m.copy(from = m.to, to = m.from)
+    }
 
-        command.copy(time = time)
+    VillageMovements(in, out)
+  }
+
+  def plündern() {
+    getNewBerichte()
+
+    val berichte = getAccBerichte() map { b => (b.villID, b) } toMap
+
+    val me = DB withSession {
+      Players byName user.userName get
+    }
+
+    val ownVillages = DB withSession {
+      Villages ofPlayer me list
+    }
+
+    println(s"${me.name} has ${ownVillages.size} villages and ${me.points} points")
+
+    val movsFut = ownVillages map getTroopMovmentsFrom
+
+    val stillAttacking = Future.sequence {
+      movsFut map {
+        for (mov <- _) yield {
+          mov.out map (_.to) filter (_.ownerID == 0) //only barbar villages
+        }
       }
+    } map (_.flatten)
+
+    val allBarbar = DB withSession { Villages.allBarbars list }
+    val villUnits = saveVillageUnits(ownVillages)().toMap
+    val tree = new QuadTree[TreeStorage](allBarbar)
+
+    val alreadyAttacking = scala.collection.mutable.Set(stillAttacking(): _*)
+
+    case class AttackPackage(village: Village, units: Map[Units.Value, Int], stream: Stream[Village])
+
+    val villagePackage = timed { () =>
+      ownVillages map (v => DB withSession {
+
+        val stream = tree.nearestStream(v.x, v.y)
+          .filter(!alreadyAttacking.contains(_))
+
+        val units = villUnits(v).
+          map(u => (u._1, u._2._1)).
+          toMap.withDefaultValue(0)
+
+        AttackPackage(v, units, stream)
+      })
+    }("building packages")
+
+    val LKAV_CAP = 80
+    val LKAV_MIN = 30
+
+    @tailrec
+    def processVillages(vills: Seq[AttackPackage], sess: ds.Session) {
+      import Units._
+      val a = for (p <- vills if p.units(SPAEHER) > 0 && p.units(LREITER) >= LKAV_MIN) yield {
+
+        val target = p.stream.head
+
+        val lkavCount = p.units(LREITER)
+        val schicken = berichte.get(target.id).map { b =>
+          val res = b.eisen + b.holz + b.lehm
+          res / LKAV_CAP + 1
+        }.getOrElse(LKAV_MIN) min p.units(LREITER)
+
+        if (schicken >= LKAV_MIN) {
+          val attackUnits = Map(SPAEHER -> 1, LREITER -> schicken)
+
+          timed { () =>
+            val attack = sess.prepareAttack(p.village, target, attackUnits)
+            attack().confirm
+
+            alreadyAttacking.add(target)
+          }(s"running attack from ${p.village.name} to coord (x: ${target.x}, y: ${target.y}) with $schicken LKAV")
+
+          val mm = attackUnits.foldLeft(p.units)((map, e) => map.updated(e._1, map(e._1) - e._2)) //subtract used units
+
+          AttackPackage(p.village, mm, p.stream.tail)
+        } else
+          AttackPackage(p.village, p.units, p.stream.tail)
+      }
+
+      if (!a.isEmpty) processVillages(a, sess)
+    }
+    timed { () =>
+      processVillages(villagePackage, sessFuture())
+    }("running attacks")
+  }
+
+  def getNewBerichte() {
+    val futXml = getXML(_.reportOverview(0))
+    val newest = DB withSession { Query(Berichte).sortBy(_.date.desc) firstOption }
+
+    val futCount = futXml map parseReportPageCount
+
+    val futFirstIDs = futXml map parseReportIDsFromPage
+
+    val futBerichte = (for (count <- futCount) yield {
+      println(s"parsing $count pages of reports!")
+
+      def parseAndSave(futIDs: Future[Seq[(Int, DateTime)]], page: Int): Future[Seq[(Future[Bericht], Future[Option[VillageResources]])]] = for (ids <- futIDs) yield {
+        val toParse = ids filter (t => newest.map(_.date < t._2).getOrElse(true))
+
+        val dbBerichte = toParse map { t =>
+          val futBericht = getXML(_.reportRequest(t._1))
+
+          val futRes = futBericht map parseReportResources
+          val futVil = futBericht map parseReportVillages
+          val futSpyRes = futBericht map parseReportSpyResources
+
+          val b = for (vil <- futVil; res <- futSpyRes) yield {
+            res map { r => VillageResources(vil._2, t._2, r._1, r._2, r._3) }
+          }
+
+          val a = for (vil <- futVil; res <- futRes) yield {
+            println(s"parsed report #${t._1}  ${t._2}")
+            Bericht(t._1, t._2, vil._1, vil._2, res._1, res._2, res._3, res._4)
+          }
+          for (ex <- a.either.left) { ex.printStackTrace(); println(t._1); println(futBericht()) }
+          (a, b)
+        }
+
+        if (ids.size == toParse.size && page + 1 < count) {
+          val futXml = getXML(_.reportOverview(page + 1))
+          val futNewIDs = futXml map parseReportIDsFromPage
+          dbBerichte ++ parseAndSave(futNewIDs, page + 1)()
+        } else
+          dbBerichte
+      }
+
+      parseAndSave(futFirstIDs, 0)
+    }).flatten
+
+    futBerichte onFailure {
+      case e: Exception => e.printStackTrace()
+    }
+
+    val futSave = futBerichte map { s =>
+      for ((futureBericht, futRes) <- s) {
+        for (
+          b <- futureBericht;
+          r <- futRes
+        ) {
+          DB withSession {
+            Berichte.* insert b
+            r foreach { VillagesResources save _ }
+          }
+        }
+      }
+    }
+
+    val berichte = futBerichte.map(x => x.map(_._1)).flatMap(Future.sequence(_))
+    val endFut = berichte map { b => println(s"added ${b.size} new reports") }
+
+    futSave()
+    endFut()
+  }
+
+  def getAccBerichte() = DB withSession {
+    val spyedBar = (for (
+      (r, v) <- VillagesResources innerJoin Villages on (_.villID is _.id) if v.ownerID isNull
+    ) yield (v.id, r)) groupBy (_._1)
+
+    val lastUpdates = spyedBar.map {
+      case (id, d) =>
+        (id, d.map(_._2.lastUpdate).max)
+    }
+    val res = for (
+      (lu, r) <- lastUpdates innerJoin VillagesResources on ((l, r) => l._1 === r.villID && l._2 === r.lastUpdate)
+    ) yield r
+
+    res.list
   }
 
   def main(args: Array[String]): Unit = {
-    //populateDB
 
-    //    val futXml = getXML(_.reportOverview(0))
-    //
-    //    val newest = DB withSession { Query(Berichte).sortBy(_.date) firstOption }
-    //    val futCount = futXml map parseReportPageCount
-    //
-    //    val futFirstIDs = futXml map parseReportIDsFromPage
-    //
-    //    val futBerichte = (for (count <- futCount) yield {
-    //      println(s"parsing $count pages of reports!")
-    //
-    //      def parseAndSave(futIDs: Future[Seq[(Int, Date)]], page: Int): Future[Seq[Future[Bericht]]] = for (ids <- futIDs) yield {
-    //        val toParse = ids //filter (t => newest.map(_.date before t._2).getOrElse(true))
-    //
-    //        val dbBerichte = toParse map { t =>
-    //          val futBericht = getXML(_.reportRequest(t._1))
-    //          futBericht(); //strange multi-threading bug, xml has to be resolved otherwise villageParsing fails with only half parsed html
-    //          //perhaps it is because of the cookies. perhaps only one request at a time should be possible
-    //          val futRes = futBericht map parseReportResources
-    //          val futVil = futBericht map parseReportVillages
-    //
-    //          val a = for (vil <- futVil; res <- futRes) yield {
-    //            println(s"parsed report #${t._1}")
-    //            Bericht(t._1, t._2, vil._1, vil._2, res._1, res._2, res._3)
-    //          }
-    //          for (ex <- a.either.left) { ex.printStackTrace(); println(t._1); println(futBericht()) }
-    //          a
-    //        }
-    //
-    //        if (ids.size == toParse.size && page + 1 < count) {
-    //          val futXml = getXML(_.reportOverview(page + 1))
-    //          val futNewIDs = futXml map parseReportIDsFromPage
-    //          dbBerichte ++ parseAndSave(futNewIDs, page + 1)()
-    //        } else
-    //          dbBerichte
-    //      }
-    //
-    //      parseAndSave(futFirstIDs, 0)
-    //    }).flatten
-    //
-    //    futBerichte  onFailure {
-    //      case e: Exception => e.printStackTrace()
-    //    }
-    //    
-    //    val futSave = futBerichte map { s =>
-    //      for (futureBericht <- s; bericht <- futureBericht) {
-    //        //DB withSession { println("test"); Berichte.* insert bericht; println(s"saved report ${bericht.id}") }
-    //      }
-    //    }
-    //
-    //    val berichte = futBerichte.map(Future.sequence(_)).flatten
-    //    val endFut = berichte map { b => println(s"added ${b.size} new reports") }
-    //
-    //    Await.ready(futSave, 1 day)
-    //    Await.ready(endFut, 1 day)
+    //   
 
     //updatePlayerVillages
     //    val f = for (s <- sessFuture) yield {
@@ -426,93 +607,160 @@ object Main {
     //    }
     //    Await.ready(f, 1 day)
 
-    DB withSession {
-      for (user <- Players byName user.userName) {
-        val ownVillages = (Villages ofPlayer user) list;
-        println(s"${user.name} has ${ownVillages.size} villages and ${user.points} points")
+    //    DB withSession {
+    //      for (user <- Players byName user.userName) {
+    //        val ownVillages = (Villages ofPlayer user) list;
+    //        println(s"${user.name} has ${ownVillages.size} villages and ${user.points} points")
 
-        val barbar = Query(Villages).filter(_.ownerID isNull).list
-        val tree = new QuadTree[TreeStorage](barbar)
+    //val barbar = Query(Villages).filter(_.ownerID isNull).list
+    //val tree = new QuadTree[TreeStorage](barbar)
 
-        println(s"there are ${barbar.size} Barbar villages!")
-        //        ownVillages
-        //
-        val first = ownVillages.head
-        println(first)
+    //println(s"there are ${barbar.size} Barbar villages!")
+    //        ownVillages
+    //
+    //        val first = ownVillages.head
+    //        println(first)
+    //
+    //        var l: List[Village] = Nil
+    //        var l2: List[Village] = Nil
+    //
+    //        val take = 10
+    //
+    //        timed { () =>
+    //          val stream = tree.nearestStream(first.x, first.y)
+    //          l = stream.take(take).toList
+    //        }("nearest search", 10)
+    //
+    //        timed { () =>
+    //          l2 = barbar.sortBy { b =>
+    //            val w = first.x - b.x
+    //            val h = first.y - b.y
+    //
+    //            w * w + h * h
+    //          } take take
+    //        }("all just sort", 10)
+    //
+    //        println(l2 equals l)
 
-        var l: List[Village] = Nil
-        var l2: List[Village] = Nil
+    //        val target = Query(Villages).filter(v => (v.x === 858) && (v.y === 409)).first
+    //
+    //        for (session <- sessFuture) {
+    //          val fut = session.prepareAttack(first, target, Map(Units.SPEER -> 10))
+    //
+    //          fut onSuccess {
+    //            case attack =>
+    //              println(s"attacking from ${first.name} village: ${target.name}")
+    //              attack.confirm()
+    //          }
+    //          
+    //          fut onFailure {
+    //            case t:Throwable => t.printStackTrace
+    //            case a => println(a)
+    //          }
+    //        }
+    //
+    //        Thread.sleep(1000000)
+    //        println("end")
 
-        val take = 10
-        
-        timed { () =>
-          val stream = tree.nearestStream(first.x, first.y)
-          l = stream.take(take).toList
-        }("nearest search", 10)
+    //        val f = for (
+    //          v <- ownVillages
+    //        ) yield getTroopMovmentsFrom(v) map { m =>
+    //          val (i, o) = m.out.flatMap(_.to.ownerID).partition(_ == user.id)
+    //          val inc = i.size + m.in.size
+    //          val out = o.size
+    //          println(s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out")
+    //          val attacks = m.in.
+    //            filter(_.moveType == Attack).
+    //            map { a => s"\tAttack from ${a.from.name} arriving at: ${a.time}" }.
+    //            mkString("\n")
+    //          println(attacks)
+    //          2
+    //        }
+    //
+    //        val ff = Future.sequence(f)
+    //        ff()
+    //        
+    //
+    //        //        val tree = timed { () =>
+    //        //          val vills = Query(Villages).list
+    //        //          new QuadTree[TreeStorage](vills)
+    //        //        }("ini quadtree")
+    //        //
+    //        //        timed { () =>
+    //        //          timed { () =>
+    //        //            val points = ownVillages.map(v => (v.x, v.y))
+    //        //            val neighbours = tree.radiusSearch(points, 100)
+    //        //          }("search", 100)prin
+    //        //        }("total search", 10)
+    //      }
+    //    }
+    val me = DB withSession {
+      Players byName user.userName get
+    }
 
-        timed { () =>
-          l2 = barbar.sortBy { b =>
-            val w = first.x - b.x
-            val h = first.y - b.y
+    val ownVillages = DB withSession {
+      Villages ofPlayer me list
+    }
 
-            w * w + h * h
-          } take take
-        }("all just sort", 10)
-        
-        println(l2 equals l)
-        val coord = (v:Village) => (v.x, v.y)
-        l map coord foreach println
-        println("----")
-        l2 map coord foreach println
+    println(s"${me.name} has ${ownVillages.size} villages and ${me.points} points")
 
-        //        val target = Query(Villages).filter(v => (v.x === 858) && (v.y === 409)).first
-        //
-        //        for (session <- sessFuture) {
-        //          val fut = session.prepareAttack(first, target, Map(Units.SPEER -> 10))
-        //
-        //          fut onSuccess {
-        //            case attack =>
-        //              println(s"attacking from ${first.name} village: ${target.name}")
-        //              attack.confirm()
-        //          }
-        //          
-        //          fut onFailure {
-        //            case t:Throwable => t.printStackTrace
-        //            case a => println(a)
-        //          }
-        //        }
-        //
-        //        Thread.sleep(1000000)
-        println("end")
+    while (true) {
+      plündern()
 
-        //
-        //        val movements = ownVillages map (v => (v, getOutgoingTroopsFrom(v)))
-        //
-        //        val f = for (v <- ownVillages) yield {
-        //          //          val m = getOutgoingTroopsFrom(v)()
-        //          for (m <- getOutgoingTroopsFrom(v)) yield {
-        //            val inc = m flatMap (_.to.ownerID) filter (_ == user.id) size
-        //            val out = m.size - inc
-        //            s"Movments for ${v.name}:\n\tincoming = $inc\n\toutgoing = $out"
-        //          }
-        //        }
-        //
-        //        val ff = Future.sequence(f map (_ map println))
-        //        ff()       
-        //        
-        //
-        //        //        val tree = timed { () =>
-        //        //          val vills = Query(Villages).list
-        //        //          new QuadTree[TreeStorage](vills)
-        //        //        }("ini quadtree")
-        //        //
-        //        //        timed { () =>
-        //        //          timed { () =>
-        //        //            val points = ownVillages.map(v => (v.x, v.y))
-        //        //            val neighbours = tree.radiusSearch(points, 100)
-        //        //          }("search", 100)
-        //        //        }("total search", 10)
-      }
+//      def time: Long = {
+//        val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
+//        val r = moves.filter(_.moveType == Return)
+//
+//        if (r.size > 0) {
+//          val next = r.map(_.time).sorted.head
+//          (next.getMillis() - DateTime.now.getMillis()) + 500
+//        } else {
+//          val a = moves.filter(_.moveType == Attack)
+//          val t = if (a.size > 0) {
+//            val next = a.map(_.time).sorted.head
+//            (next.getMillis() - DateTime.now.getMillis()) + 500
+//          } else
+//            (5 minutes).millis
+//
+//          t
+//        }
+//      }
+
+      printAndSleepTime((5 minutes).millis)
+    }
+    //    printUnits()
+    //populateDB
+    //    getNewBerichte()
+    //    
+    //    DB withSession {
+    //      val n = getAccBerichte map { b => b.eisen + b.holz + b.lehm }
+    //      println(n.sum)
+    //    }
+
+  }
+
+  def printAndSleepTime(ms: Long) {
+    val formater = DateTimeFormat.forPattern("HH:mm:ss")
+    println(s"Weakup next at ${formater.print(DateTime.now +(ms.toDuration))} Uhr")
+    Thread sleep ms
+  }
+
+  def printUnits() {
+    val me = DB withSession {
+      Players byName user.userName get
+    }
+
+    val ownVillages = DB withSession {
+      Villages ofPlayer me list
+    }
+
+    val units = saveVillageUnits(ownVillages)().toMap
+
+    for ((v, u) <- units) {
+      println(s"Units in ${v.name}:")
+
+      val lines = u.filter(e => e._2._2 > 0).map(e => s"\t${e._1}\t\t${e._2._1}\t/\t${e._2._2}")
+      println(lines.mkString("\n"))
     }
   }
 
@@ -527,5 +775,10 @@ object Main {
     println(text + s": ${System.currentTimeMillis() - time} ms")
     a
   }
+
 }
+
+
+
+
 

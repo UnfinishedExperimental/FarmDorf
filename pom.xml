@@ -72,6 +72,11 @@
 			<artifactId>shapeless_2.10</artifactId>
 			<version>1.2.5-SNAPSHOT</version>
 		</dependency>
+		<dependency>
+			<groupId>net.databinder.dispatch</groupId>
+			<artifactId>dispatch-tagsoup_2.10</artifactId>
+			<version>0.10.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>

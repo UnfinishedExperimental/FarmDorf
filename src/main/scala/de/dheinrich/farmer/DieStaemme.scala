@@ -16,6 +16,7 @@ import dispatch.host
 import dispatch.implyRequestHandlerTuple
 import dispatch.implyRequestVerbs
 import dispatch.url
+import dispatch.as.tagsoup.NodeSeq
 import java.util.Date
 import org.json4s.JsonAST._
 import scalaz._
@@ -28,6 +29,8 @@ import dispatch.OkFunctionHandler
 import com.ning.http.client.Request
 import scala.xml.Elem
 import scala.xml.Node
+import scala.concurrent.duration._
+import org.xml.sax.InputSource
 
 object DieStaemme {
   private val http = dispatch.Http.configure(_ setFollowRedirects true)
@@ -59,8 +62,9 @@ object DieStaemme {
     }
   }
 
-  private def parseLoginData(data: String) = {
-    val root = HTML5Parser.loadXML(data)
+  private def parseLoginData(data: String) = {    
+    
+    val root = NodeSeq.adapter.loadXML(new InputSource(data), NodeSeq.parserFactory.newSAXParser)
 
     val server = (root \\ "div").filter(ns => (ns \ "@id").text equals "active_server").head \\ "a" \\ "@onclick"
 
@@ -129,21 +133,21 @@ object DieStaemme {
     private def screenR(screen: Screens.Value) = game <<? ("screen" -> screen.toString)
     private def vilScreen(screen: Screens.Value, id: Int) = screenR(screen) <<? "village" -> id.toString
 
-    def screenRequest[A](screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(screenR(screen), HTML5))
+    def screenRequest[A](screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(screenR(screen), NodeSeq(_)))
 
     private val pageItemCount = 12
     def reportOverview(page: Int): Future[Node] @@ ReportOverview = {
       val from = page * pageItemCount
       val req = game <<? Seq("screen" -> Screens.Report.toString, "mode" -> "attack", "from" -> from.toString)
-      Tag(execute(req, HTML5))
+      Tag(execute(req, NodeSeq(_)))
     }
 
     def reportRequest(id: Int): Future[Node] @@ Report = {
       val req = game <<? Seq("screen" -> Screens.Report.toString, "view" -> id.toString)
-      Tag(execute(req, HTML5))
+      Tag(execute(req, NodeSeq(_)))
     }
 
-    def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(vilScreen(screen, v.id), HTML5))
+    def villagePage[A](v: Village, screen: Screens.Value @@ A): Future[Node] @@ A = Tag(execute(vilScreen(screen, v.id), NodeSeq(_)))
 
     case class Attack(private val request: RequestBuilder) {
       def confirm(): Future[Unit] = { execute(request) map { r => () } } //vllcht sollte überprüft werden ob der angriff wirklich ausgeführt wurde
@@ -151,7 +155,7 @@ object DieStaemme {
 
     def prepareAttack(from: Village, target: Village, units: Map[Units.Value, Int]) = {
       val request = vilScreen(Screens.Place, from.id) <<? "target" -> target.id.toString
-      val attackForm = execute(request, HTML5)
+      val attackForm = execute(request, NodeSeq)
 
       val futConfirm = attackForm flatMap { formXML =>
         val uniqueID = (formXML \\ "form" filter (n => (n \ "@id").text equals "units_form")) \ "input"
@@ -162,7 +166,7 @@ object DieStaemme {
         val unitPara = for ((unit, count) <- units) yield (unit.toString, count.toString)
 
         val request = vilScreen(Screens.Place, from.id) <<? "try" -> "confirm" << unitPara << para
-        execute(request, HTML5)
+        execute(request, NodeSeq)
       }
 
       for (confirm <- futConfirm) yield {

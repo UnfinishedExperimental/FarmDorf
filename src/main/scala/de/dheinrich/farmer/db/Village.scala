@@ -9,7 +9,7 @@ case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int, 
 trait VillagesComponent { this: DBProfile =>
   import profile.simple._
 
-  implicit val boolTypeMapper = MappedTypeMapper.base[DateTime, Timestamp](
+  implicit val dateTypeMapper = MappedTypeMapper.base[DateTime, Timestamp](
     { dt => new Timestamp(dt.getMillis()) }, 
     { ts => new DateTime(ts.getTime()) } 
     )
@@ -39,6 +39,8 @@ trait VillagesComponent { this: DBProfile =>
 
     private def ownedVillages(pid: Int) = for (v <- Villages if v.ownerID is pid) yield v
     def ofPlayer(player: Player) = ownedVillages(player.id)
+    
+    def allBarbars() = Query(Villages) filter(_.ownerID isNull)
 
     def save(v: Village)(implicit session: Session) = {
       val a = Query(Villages) filter (_.id is v.id) update v
