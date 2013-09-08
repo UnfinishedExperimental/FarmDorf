@@ -200,7 +200,12 @@ object Main {
     }
   })
 
-  def parseReportPageCount(xml: Node @@ ReportOverview) = (xml \\ "a" filter (n => (n \ "@class").text equals ("paged-nav-item"))).size + 1
+val berichtPagePattern = """ \[(\d+)\] """.r
+  def parseReportPageCount(xml: Node @@ ReportOverview) = {
+val last = (xml \\ "a" filter (n => (n \ "@class").text equals ("paged-nav-item"))).last.text
+val berichtPagePattern(n) = last
+n.toInt
+}
 
   def parseReportIDsFromPage(xml: Node @@ ReportOverview) = {
     val table = (xml \\ "table" filter (n => (n \ "@id").text equals "report_list")) head
@@ -701,7 +706,8 @@ object Main {
     val ownVillages = DB withSession {
       Villages ofPlayer me list
     }
-
+while(true){
+try{
     while (true) {
       plündern()
 
@@ -731,6 +737,11 @@ object Main {
       println("waiting for returning troops")
       printAndSleepTime(time)
     }
+}catch{
+case _:Throwable =>
+      printAndSleepTime((15 minutes).millis)
+}
+}
     //    printUnits()
     //populateDB
     //    getNewBerichte()
