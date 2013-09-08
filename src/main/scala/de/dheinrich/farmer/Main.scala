@@ -322,7 +322,7 @@ object Main {
         } else
           DateTimeFormat.forPattern("dd.MM.").parseDateTime(date)
 
-      val parsedTime = DateTimeFormat.forPattern("HH:mm:ss:SSS").parseDateTime(time)
+      val parsedTime = DateTimeFormat.forPattern("HH:mm:ss:SSS").parseDateTime(time) + (1 hour)
 
       parsedDate.millisOfDay().setCopy(0) + parsedTime.millis
     }
@@ -702,31 +702,34 @@ object Main {
       Villages ofPlayer me list
     }
 
-    println(s"${me.name} has ${ownVillages.size} villages and ${me.points} points")
-
     while (true) {
       plündern()
 
-//      def time: Long = {
-//        val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
-//        val r = moves.filter(_.moveType == Return)
-//
-//        if (r.size > 0) {
-//          val next = r.map(_.time).sorted.head
-//          (next.getMillis() - DateTime.now.getMillis()) + 500
-//        } else {
-//          val a = moves.filter(_.moveType == Attack)
-//          val t = if (a.size > 0) {
-//            val next = a.map(_.time).sorted.head
-//            (next.getMillis() - DateTime.now.getMillis()) + 500
-//          } else
-//            (5 minutes).millis
-//
-//          t
-//        }
-//      }
+      @tailrec
+      def time: Long = {
+        val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
+        val r = moves.filter(_.moveType == Return)
 
-      printAndSleepTime((5 minutes).millis)
+        if (r.size > 0) {
+          val next = r.map(_.time).sorted.head
+          (next.getMillis() - DateTime.now.getMillis()) + 500
+        } else {
+          val a = moves.filter(_.moveType == Attack)
+          if (a.size > 0) {
+            val next = a.map(_.time).sorted.head
+            val t = (next.getMillis() - DateTime.now.getMillis()) + 500
+
+            println("waiting for attacks to happen")
+            printAndSleepTime(t)
+
+            time
+          } else
+            (5 minutes).millis
+        }
+      }
+
+      println("waiting for returning troops")
+      printAndSleepTime(time)
     }
     //    printUnits()
     //populateDB
@@ -740,9 +743,11 @@ object Main {
   }
 
   def printAndSleepTime(ms: Long) {
+if(ms > 0){
     val formater = DateTimeFormat.forPattern("HH:mm:ss")
-    println(s"Weakup next at ${formater.print(DateTime.now +(ms.toDuration))} Uhr")
+    println(s"Wakeup next at ${formater.print(DateTime.now + (ms.toDuration))} Uhr")
     Thread sleep ms
+}
   }
 
   def printUnits() {
