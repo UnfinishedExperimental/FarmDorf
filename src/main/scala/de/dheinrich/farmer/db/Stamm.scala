@@ -1,11 +1,11 @@
 package de.dheinrich.farmer.db
 
-case class Stamm(id: Int, name: String, tag: String)
+case class Stamm(id: Int, name: String, tag: String) extends IdEntity
 
-trait StaemmeComponent { this: DBProfile with PlayersComponent =>
+trait StaemmeComponent extends IdEntityComponent { this: DBProfile with PlayersComponent =>
   import profile.simple._
-  
-  object Staemme extends Table[Stamm]("STAEMME") {
+
+  object Staemme extends Table[Stamm]("STAEMME") with IdEntityTable[Stamm] {
     def id = column[Int]("ID", O.PrimaryKey)
     def name = column[String]("NAME")
     def tag = column[String]("TAG")
@@ -16,11 +16,5 @@ trait StaemmeComponent { this: DBProfile with PlayersComponent =>
     }
 
     def playersOf(stamm: Stamm)(implicit s: Session) = Players.byStamm(stamm)
-
-    def save(v: Stamm)(implicit session: Session) = {
-      val a = Query(Staemme) filter (_.id is v.id) update v
-      if (a == 0)
-        * insert v
-    }
   }
 }

@@ -200,12 +200,12 @@ object Main {
     }
   })
 
-val berichtPagePattern = """ \[(\d+)\] """.r
+  val berichtPagePattern = """ \[(\d+)\] """.r
   def parseReportPageCount(xml: Node @@ ReportOverview) = {
-val last = (xml \\ "a" filter (n => (n \ "@class").text equals ("paged-nav-item"))).last.text
-val berichtPagePattern(n) = last
-n.toInt
-}
+    val last = (xml \\ "a" filter (n => (n \ "@class").text equals ("paged-nav-item"))).last.text
+    val berichtPagePattern(n) = last
+    n.toInt
+  }
 
   def parseReportIDsFromPage(xml: Node @@ ReportOverview) = {
     val table = (xml \\ "table" filter (n => (n \ "@id").text equals "report_list")) head
@@ -706,42 +706,42 @@ n.toInt
     val ownVillages = DB withSession {
       Villages ofPlayer me list
     }
-while(true){
-try{
     while (true) {
-      plündern()
+      try {
+        while (true) {
+          plündern()
 
-      @tailrec
-      def time: Long = {
-        val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
-        val r = moves.filter(_.moveType == Return)
+          @tailrec
+          def time: Long = {
+            val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
+            val r = moves.filter(_.moveType == Return)
 
-        if (r.size > 0) {
-          val next = r.map(_.time).sorted.head
-          (next.getMillis() - DateTime.now.getMillis()) + 500
-        } else {
-          val a = moves.filter(_.moveType == Attack)
-          if (a.size > 0) {
-            val next = a.map(_.time).sorted.head
-            val t = (next.getMillis() - DateTime.now.getMillis()) + 500
+            if (r.size > 0) {
+              val next = r.map(_.time).sorted.head
+              (next.getMillis() - DateTime.now.getMillis()) + 500
+            } else {
+              val a = moves.filter(_.moveType == Attack)
+              if (a.size > 0) {
+                val next = a.map(_.time).sorted.head
+                val t = (next.getMillis() - DateTime.now.getMillis()) + 500
 
-            println("waiting for attacks to happen")
-            printAndSleepTime(t)
+                println("waiting for attacks to happen")
+                printAndSleepTime(t)
 
-            time
-          } else
-            (5 minutes).millis
+                time
+              } else
+                (5 minutes).millis
+            }
+          }
+
+          println("waiting for returning troops")
+          printAndSleepTime(time)
         }
+      } catch {
+        case _: Throwable =>
+          printAndSleepTime((15 minutes).millis)
       }
-
-      println("waiting for returning troops")
-      printAndSleepTime(time)
     }
-}catch{
-case _:Throwable =>
-      printAndSleepTime((15 minutes).millis)
-}
-}
     //    printUnits()
     //populateDB
     //    getNewBerichte()
@@ -754,11 +754,11 @@ case _:Throwable =>
   }
 
   def printAndSleepTime(ms: Long) {
-if(ms > 0){
-    val formater = DateTimeFormat.forPattern("HH:mm:ss")
-    println(s"Wakeup next at ${formater.print(DateTime.now + (ms.toDuration))} Uhr")
-    Thread sleep ms
-}
+    if (ms > 0) {
+      val formater = DateTimeFormat.forPattern("HH:mm:ss")
+      println(s"Wakeup next at ${formater.print(DateTime.now + (ms.toDuration))} Uhr")
+      Thread sleep ms
+    }
   }
 
   def printUnits() {

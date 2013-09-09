@@ -2,11 +2,12 @@ package de.dheinrich.farmer.db
 
 import java.sql.Date
 
-case class Player(id: Int, name: String, points: Int, stammID: Option[Int], schutz: Option[Date])
+case class Player(id: Int, name: String, points: Int, stammID: Option[Int], schutz: Option[Date]) extends IdEntity
 
-trait PlayersComponent { this: DBProfile =>
+trait PlayersComponent extends IdEntityComponent { this: DBProfile =>
   import profile.simple._
-  object Players extends Table[Player]("PLAYERS") {
+  
+  object Players extends Table[Player]("PLAYERS") with IdEntityTable[Player] {
     def id = column[Int]("ID", O.PrimaryKey)
     def name = column[String]("NAME")
     def points = column[Int]("PUNKTE")
@@ -18,11 +19,5 @@ trait PlayersComponent { this: DBProfile =>
     def byStamm(stamm: Stamm)(implicit session: Session) = Query(Players) filter (_.stammID is stamm.id)
 
     def byName(name: String)(implicit session: Session) = Query(Players) filter (_.name is name) firstOption
-
-    def save(v: Player)(implicit session: Session) = {
-      val a = Query(Players) filter (_.id is v.id) update v
-      if (a == 0)
-        * insert v
-    }
   }
 }

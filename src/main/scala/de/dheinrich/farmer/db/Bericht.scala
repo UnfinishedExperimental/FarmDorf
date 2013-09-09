@@ -5,13 +5,12 @@ import de.dheinrich.farmer.Units
 import org.joda.time.DateTime
 
 case class Bericht(id: Int, date: DateTime, attackerID: Int, defenderID: Int,
-  holz: Int = 0, lehm: Int = 0, eisen: Int = 0, maxCapa: Int = 0)
+  holz: Int = 0, lehm: Int = 0, eisen: Int = 0, maxCapa: Int = 0) extends IdEntity
 
-trait BerichteComponent { this: DBProfile with VillagesComponent =>
+trait BerichteComponent extends IdEntityComponent { this: DBProfile with VillagesComponent =>
   import profile.simple._
 
-
-  object Berichte extends Table[Bericht]("BERICHTE") {
+  object Berichte extends Table[Bericht]("BERICHTE") with IdEntityTable[Bericht] {
     def id = column[Int]("ID", O.PrimaryKey)
 
     def date = column[DateTime]("DATE")
