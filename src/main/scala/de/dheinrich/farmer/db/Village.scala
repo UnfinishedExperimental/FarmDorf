@@ -4,14 +4,15 @@ import java.sql.Timestamp
 import org.joda.time.DateTime
 import scala.slick.lifted.MappedProjection
 
-
 case class Village(id: Int, ownerID: Option[Int], name: String, x: Int, y: Int,
-    points: Int = 0, mood: Int = 100,  lastUpdate: DateTime = new DateTime(0),
-    lastUnitUp: DateTime = new DateTime(0), lastBuildingsUp: DateTime = new DateTime(0)) extends IdEntity
+  points: Int = 0, mood: Int = 100, lastUpdate: DateTime = new DateTime(0),
+  lastUnitUp: DateTime = new DateTime(0), lastBuildingsUp: DateTime = new DateTime(0)) extends IdEntity {
+  def toShortString() = s"$name($x|$y)"
+}
 
 trait VillagesComponent extends IdEntityComponent { this: DBProfile =>
   import profile.simple._
-  
+
   implicit val dateTypeMapper = MappedTypeMapper.base[DateTime, Timestamp](
     { dt => new Timestamp(dt.getMillis()) },
     { ts => new DateTime(ts.getTime()) })

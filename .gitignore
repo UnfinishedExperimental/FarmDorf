@@ -3,3 +3,4 @@ target/
 testDB*
 login.json
 *~
+*Log.txt

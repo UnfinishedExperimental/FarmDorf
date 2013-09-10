@@ -30,6 +30,8 @@ import scala.xml.Elem
 import com.github.nscala_time.time.Imports._
 import shapeless._
 import scala.annotation.tailrec
+import java.io.FileWriter
+import scala.collection.immutable.TreeMap
 
 object Main {
 
@@ -408,10 +410,10 @@ object Main {
     VillageMovements(in, out)
   }
 
-  def plündern() {
+  def plündern() = {
     getNewBerichte()
 
-    val berichte = getAccBerichte() map { b => (b.villID, b) } toMap
+    val berichte = getAccBerichte().map(b => (b.villID, b.eisen + b.holz + b.lehm)).toMap.withDefaultValue(0)
 
     val me = DB withSession {
       Players byName user.userName get
@@ -437,7 +439,7 @@ object Main {
     val villUnits = saveVillageUnits(ownVillages)().toMap
     val tree = new QuadTree[TreeStorage](allBarbar)
 
-    val alreadyAttacking = scala.collection.mutable.Set(stillAttacking(): _*)
+    val alreadyAttacking = stillAttacking().toSet
 
     case class AttackPackage(village: Village, units: Map[Units.Value, Int], stream: Stream[Village])
 
@@ -459,40 +461,47 @@ object Main {
     val LKAV_MIN = 30
 
     @tailrec
-    def processVillages(vills: Seq[AttackPackage], sess: ds.Session) {
+    def processVillages(vills: Seq[AttackPackage], rohstoffe: Map[Int, Int]) {
       import Units._
-      val a = for (p <- vills if p.units(SPAEHER) > 0 && p.units(LREITER) >= LKAV_MIN) yield {
+
+      val filtered = vills.filter(p => p.units(SPAEHER) > 0 && p.units(LREITER) >= LKAV_MIN)
+
+      type foldType = (Map[Int, Int], List[AttackPackage])
+      val (alterRoh, remaining) = filtered.foldLeft[foldType]((rohstoffe, Nil)) { (t, p) =>
+        val (roh, packages) = t
 
         val target = p.stream.head
 
         val lkavCount = p.units(LREITER)
-        val schicken = berichte.get(target.id).map { b =>
-          val res = b.eisen + b.holz + b.lehm
-          res / LKAV_CAP + 1
-        }.getOrElse(LKAV_MIN) min p.units(LREITER)
+        val schicken = roh.get(target.id).
+          map(_ / LKAV_CAP + 1).
+          getOrElse(LKAV_MIN).
+          min(p.units(LREITER))
 
         if (schicken >= LKAV_MIN) {
           val attackUnits = Map(SPAEHER -> 1, LREITER -> schicken)
 
           timed { () =>
-            val attack = sess.prepareAttack(p.village, target, attackUnits)
+            val attack = sessFuture.flatMap(_.prepareAttack(p.village, target, attackUnits))
             attack().confirm
-
-            alreadyAttacking.add(target)
           }(s"running attack from ${p.village.name} to coord (x: ${target.x}, y: ${target.y}) with $schicken LKAV")
 
-          val mm = attackUnits.foldLeft(p.units)((map, e) => map.updated(e._1, map(e._1) - e._2)) //subtract used units
+          val newUnits = attackUnits.foldLeft(p.units)((map, e) => map.updated(e._1, map(e._1) - e._2)) //subtract used units
+          val newRoh = roh.updated(target.id, roh(target.id) - schicken * LKAV_CAP)
 
-          AttackPackage(p.village, mm, p.stream.tail)
+          (newRoh, AttackPackage(p.village, newUnits, p.stream.tail) :: packages)
         } else
-          AttackPackage(p.village, p.units, p.stream.tail)
+          (roh, AttackPackage(p.village, p.units, p.stream.tail) :: packages)
       }
 
-      if (!a.isEmpty) processVillages(a, sess)
+      if (!remaining.isEmpty) processVillages(remaining, alterRoh)
     }
+
     timed { () =>
-      processVillages(villagePackage, sessFuture())
+      processVillages(villagePackage, berichte)
     }("running attacks")
+
+    Future.sequence(movsFut).apply
   }
 
   def getNewBerichte() {
@@ -699,49 +708,60 @@ object Main {
     //        //        }("total search", 10)
     //      }
     //    }
-    val me = DB withSession {
-      Players byName user.userName get
-    }
 
-    val ownVillages = DB withSession {
-      Villages ofPlayer me list
-    }
-    while (true) {
-      try {
-        while (true) {
-          plündern()
-
-          @tailrec
-          def time: Long = {
-            val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
-            val r = moves.filter(_.moveType == Return)
-
-            if (r.size > 0) {
-              val next = r.map(_.time).sorted.head
-              (next.getMillis() - DateTime.now.getMillis()) + 500
-            } else {
-              val a = moves.filter(_.moveType == Attack)
-              if (a.size > 0) {
-                val next = a.map(_.time).sorted.head
-                val t = (next.getMillis() - DateTime.now.getMillis()) + 500
-
-                println("waiting for attacks to happen")
-                printAndSleepTime(t)
-
-                time
-              } else
-                (5 minutes).millis
-            }
-          }
-
-          println("waiting for returning troops")
-          printAndSleepTime(time)
+        val me = DB withSession {
+          Players byName user.userName get
         }
-      } catch {
-        case _: Throwable =>
-          printAndSleepTime((15 minutes).millis)
-      }
-    }
+    
+        val ownVillages = DB withSession {
+          Villages ofPlayer me list
+        }
+    
+        val loggedAttacks = scala.collection.mutable.Set[Movement]()
+    
+        while (true) {
+          try {
+            var lastUpdate = DateTime.now
+            while (true) {
+              val attacks = plündern().flatMap(_.in).filter(_.moveType == Attack)
+              val toLog = attacks.filter(loggedAttacks.add(_))
+              val now = DateTime.now
+              logHeader(now, toLog.size)
+              toLog.sortBy(_.to.name) foreach (logAttack(_, lastUpdate, now))
+    
+              @tailrec
+              def time: Long = {
+                val moves = (Future.sequence(ownVillages map getTroopMovmentsFrom)).apply.flatMap(_.out)
+                val r = moves.filter(_.moveType == Return)
+    
+                if (r.size > 0) {
+                  val next = r.map(_.time).sorted.head
+                  (next.getMillis() - DateTime.now.getMillis()) + 500
+                } else {
+                  val a = moves.filter(_.moveType == Attack)
+                  if (a.size > 0) {
+                    val next = a.map(_.time).sorted.head
+                    val t = (next.getMillis() - DateTime.now.getMillis()) + 500
+    
+                    println("waiting for attacks to happen")
+                    printAndSleepTime(t)
+    
+                    time
+                  } else
+                    (5 minutes).millis
+                }
+              }
+    
+              lastUpdate = DateTime.now
+    
+              println("waiting for returning troops")
+              printAndSleepTime(time)
+            }
+          } catch {
+            case _: Throwable =>
+              printAndSleepTime((15 minutes).millis)
+          }
+        }
     //    printUnits()
     //populateDB
     //    getNewBerichte()
@@ -751,6 +771,46 @@ object Main {
     //      println(n.sum)
     //    }
 
+  }
+
+  val logFile = "attackLog.txt"
+
+  val runTimes = {
+    import Units._
+    TreeMap(9 -> SPAEHER, 10 -> LREITER, 11 -> SREITER,
+      18 -> SPEER, 18 -> AXT, 22 -> SCHWERT,
+      30 -> RAMBOCK, 30 -> KATAPULT, 35 -> ADEL)
+  }
+
+  def logHeader(now: DateTime, count: Int) {
+    if (count > 0) {
+	val text = count + " new attacks"
+	val cmd = Array("sh", "-c", "echo \"" + text + "\" | festival --tts");
+        Runtime.getRuntime().exec(cmd);
+	println(text)
+
+      val fw = new FileWriter(logFile, true)
+      try {
+        fw.write(s"\nLoging $count new attacks at: ${now}\n")
+      } finally fw.close()
+    }
+  }
+
+  def logAttack(a: Movement, last: DateTime, now: DateTime) {
+    val dist = QuadTree.dist(a.to, a.from)
+
+    val lower = (new Duration(now, a.time).getStandardMinutes() / dist).ceil.toInt
+    val upper = (new Duration(last, a.time).getStandardMinutes() / dist).ceil.toInt min 35
+
+    val lastKey = runTimes.from(upper).firstKey
+    val possibleTypes = runTimes.range(lower, lastKey + 1)
+
+    val uType = possibleTypes.values.mkString(", ")
+
+    val fw = new FileWriter(logFile, true)
+    try {
+      fw.write(s"${a.time}\ton: ${a.to.toShortString}\tfrom: ${a.from.toShortString}\twith: [$uType]\n")
+    } finally fw.close()
   }
 
   def printAndSleepTime(ms: Long) {

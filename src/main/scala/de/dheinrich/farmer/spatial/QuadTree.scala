@@ -45,6 +45,18 @@ object QuadTree {
     x = ((x >> S(2)) | x) & B(3)
     ((x >> S(3)) | x) & B(4)
   }
+
+  def dist(v1: Village, v: Village): Float = dist(v1.x, v1.y, v)
+
+  def dist(x: Int, y: Int, v: Village): Float = {
+    Math.sqrt(distSqr(x, y, v)).toFloat
+  }
+
+  def distSqr(x: Int, y: Int, v: Village) = {
+    val w = x - v.x
+    val h = y - v.y
+    w * w + h * h
+  }
 }
 
 class QuadTree[A <: Storage](vills: Traversable[Village])(implicit builder: Builder[A]) {
@@ -175,16 +187,6 @@ class QuadTree[A <: Storage](vills: Traversable[Village])(implicit builder: Buil
     }
 
     a(START_RADIUS, 0)
-  }
-
-  def dist(x: Int, y: Int, v: Village) = {
-    Math.sqrt(distSqr(x, y, v)).toFloat
-  }
-
-  def distSqr(x: Int, y: Int, v: Village) = {
-    val w = x - v.x
-    val h = y - v.y
-    w * w + h * h
   }
 }
 
